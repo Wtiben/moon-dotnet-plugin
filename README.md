@@ -1,8 +1,57 @@
 # moon-dotnet-plugin
 
-A [moon](https://moonrepo.dev) toolchain WASM plugin for the .NET ecosystem (SDK-style C# projects).
+A [moon](https://moonrepo.dev) 2.x toolchain WASM plugin for the .NET ecosystem (SDK-style C# projects).
 
-Status: work in progress.
+Provides:
+
+- **Tier 1** — project usage detection (`*.csproj`/`*.sln`/`global.json`/props files),
+  config schema, Docker metadata & scaffold globs.
+- **Tier 2** — moon project-graph dependencies inferred from **real MSBuild evaluation**
+  of `ProjectReference` items (`dotnet msbuild -getProperty/-getItem`, .NET SDK 8+),
+  `dotnet restore` dependency installs (with automatic `--locked-mode`), task-content
+  hashing from lock files or the evaluated package set, `packages.lock.json` parsing,
+  Docker pruning of `bin`/`obj`, and `DOTNET_ROOT` injection into task environments.
+
+Dependency extraction shells out to MSBuild instead of statically parsing XML, so
+`Directory.Build.props` chains, Central Package Management, SDK defaults, and
+`Condition`s all resolve correctly. This costs ~0.5s per project per graph build.
+
+## Usage
+
+`.moon/toolchains.yml`:
+
+```yaml
+dotnet:
+  plugin: 'file://../path/to/dotnet_toolchain.wasm'  # relative from the .moon dir
+  inferDependencies: true   # default
+  inferTasks: false         # default; experimental
+  restoreArgs: []           # extra args for `dotnet restore`
+  # dotnetRoot: 'C:/Users/me/.dotnet'
+```
+
+`moon.yml` (per project):
+
+```yaml
+language: 'csharp'   # moon 2.3.3 rejects 'c#'
+
+toolchains:
+  default: 'dotnet'
+
+tasks:
+  build:
+    command: 'dotnet build --no-restore'
+    inputs:
+      - '**/*.cs'
+      - '*.csproj'
+```
+
+Requires a .NET SDK 8+ (`-getProperty`/`-getItem` JSON output needs MSBuild 17.8+).
+
+## Scope cuts (v1)
+
+SDK-style projects only (no legacy csproj), `dotnet` CLI only, C# focus (`.fsproj`/
+`.vbproj` may work incidentally, untested), no NuGet workloads, no global tools,
+outer-build evaluation only for multi-targeted projects. See FOLLOWUPS.md.
 
 ## SDK installation (tier 3)
 
