@@ -1,4 +1,5 @@
 pub mod config;
+pub mod msbuild;
 
 #[cfg(feature = "wasm")]
 mod tier1;
