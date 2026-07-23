@@ -2,7 +2,30 @@
 
 A [moon](https://moonrepo.dev) toolchain WASM plugin for the .NET ecosystem (SDK-style C# projects).
 
-Status: work in progress (Phase 0 scaffolding).
+Status: work in progress.
+
+## SDK installation (tier 3)
+
+This plugin does **not** install the .NET SDK itself — it exports no `setup_toolchain`
+or proto tool functions, so moon treats the toolchain as tier 1+2 only. A `version:`
+field under `dotnet:` in `.moon/toolchains.yml` will NOT drive an SDK install. The SDK
+is expected to come from either:
+
+1. **proto** via a community dotnet plugin, installing into `~/.dotnet`. The plugin's
+   `extend_task_command` injects `DOTNET_ROOT` + `PATH` into task environments when it
+   finds a real SDK layout there (or an explicit `dotnetRoot` setting / existing
+   `DOTNET_ROOT` env var).
+2. **A system-installed dotnet** on `PATH` — the always-working fallback. When no
+   DOTNET_ROOT candidate is found, `extend_task_command` is a no-op and tasks use
+   whatever `dotnet` resolves on the system.
+
+> **Caveat**: the archived community plugin `Phault/proto-dotnet-plugin` (v0.3.0) was
+> tested on proto 0.58.2 on Windows and **fails during native install** with
+> `%1 is not a valid Win32 application. (os error 193)` — it extracts `~/.dotnet/sdk/<ver>`
+> but never places the `dotnet` host executable, leaving a broken root. See FOLLOWUPS.md
+> for the tracked replacement options. Because `~/.dotnet` is also the dotnet CLI's
+> user-level cache directory, the plugin only treats it as a DOTNET_ROOT when the
+> `dotnet` executable actually exists at its root.
 
 ## Development notes
 
