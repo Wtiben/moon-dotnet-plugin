@@ -12,6 +12,16 @@ Status: work in progress (Phase 0 scaffolding).
 - On this dev machine the host toolchain is `x86_64-pc-windows-gnu` (no MSVC C++ build
   tools installed; the GNU toolchain ships a self-contained linker).
 
+### moon workspace facts (verified against moon 2.3.3)
+
+- `moon toolchain info dotnet` requires the plugin locator as an explicit second
+  argument (it does not read custom entries from `.moon/toolchains.yml`):
+  `moon toolchain info dotnet "file://../moon-dotnet-plugin/target/wasm32-wasip1/debug/dotnet_toolchain.wasm"`.
+  The locator is resolved relative to the current working directory.
+- In `moon.yml`, `language: 'c#'` is rejected by moon 2.3.3 ("Invalid fallback
+  variant"); use `language: 'csharp'`. The project-level toolchain key is
+  `toolchains` (plural): `toolchains: { default: 'dotnet' }`.
+
 ### Test harness facts (verified against vendored sources)
 
 - **`exec_command` in the test sandbox is REAL** — `warpgate-0.30.5/src/host.rs:134`

@@ -1,3 +1,10 @@
+# The host-side cdylib build (unused by tests, but always built by cargo)
+# exceeds the 65k DLL export-ordinal limit on windows-gnu. Nothing consumes
+# the host DLL's exports, so exclude them all. Applies only to the host
+# target — the wasm32-wasip1 build is unaffected.
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-arg=-Wl,--exclude-all-symbols"]
+
 [profile.dev]
 debug = "line-tables-only"
 
