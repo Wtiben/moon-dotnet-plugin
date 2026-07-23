@@ -160,6 +160,253 @@ mod dotnet_toolchain_tier2 {
         }
     }
 
+    mod install_dependencies {
+        use super::*;
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn plain_restore_without_lockfile() {
+            let sandbox = create_moon_sandbox("projects");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .install_dependencies(InstallDependenciesInput {
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            let command = output.install_command.unwrap().command;
+            assert_eq!(command.command, "dotnet");
+            assert_eq!(command.args, vec!["restore".to_string()]);
+            assert!(output.dedupe_command.is_none());
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn locked_mode_when_lockfile_present() {
+            let sandbox = create_moon_sandbox("locked");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .install_dependencies(InstallDependenciesInput {
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            let command = output.install_command.unwrap().command;
+            assert_eq!(
+                command.args,
+                vec!["restore".to_string(), "--locked-mode".to_string()]
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn appends_restore_args() {
+            let sandbox = create_moon_sandbox("projects");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .install_dependencies(InstallDependenciesInput {
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    toolchain_config: json!({ "restoreArgs": ["--verbosity", "minimal"] }),
+                    ..Default::default()
+                })
+                .await;
+
+            let command = output.install_command.unwrap().command;
+            assert_eq!(
+                command.args,
+                vec![
+                    "restore".to_string(),
+                    "--verbosity".to_string(),
+                    "minimal".to_string()
+                ]
+            );
+        }
+    }
+
+    mod parse_lock {
+        use super::*;
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn parses_generated_lockfile() {
+            let sandbox = create_moon_sandbox("locked");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .parse_lock(ParseLockInput {
+                    path: VirtualPath::Real(
+                        sandbox.path().join("proj/packages.lock.json"),
+                    ),
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    ..Default::default()
+                })
+                .await;
+
+            let newtonsoft = &output.dependencies["Newtonsoft.Json"];
+            assert_eq!(newtonsoft.len(), 1);
+            assert_eq!(
+                newtonsoft[0].version.as_ref().unwrap().to_string(),
+                "13.0.3"
+            );
+            assert!(
+                newtonsoft[0]
+                    .hash
+                    .as_deref()
+                    .unwrap()
+                    .starts_with("HrC5")
+            );
+        }
+    }
+
+    mod hash_task_contents {
+        use super::*;
+
+        fn fragment(id: &str, source: &str) -> moon_pdk_api::ProjectFragment {
+            moon_pdk_api::ProjectFragment {
+                id: Id::raw(id),
+                source: source.into(),
+                toolchains: vec![Id::raw("dotnet")],
+                ..Default::default()
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn lockfile_branch_includes_raw_lock_text() {
+            let sandbox = create_moon_sandbox("locked");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .hash_task_contents(HashTaskContentsInput {
+                    project: fragment("proj", "proj"),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            assert_eq!(output.contents.len(), 1);
+            let lock_text = output.contents[0]["lockfile"].as_str().unwrap();
+            assert!(lock_text.contains("Newtonsoft.Json"));
+            assert!(lock_text.contains("contentHash"));
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn evaluated_packages_branch_without_lockfile() {
+            let sandbox = create_moon_sandbox("projects");
+            sandbox.create_file(
+                "Directory.Build.props",
+                "<Project><PropertyGroup><LangVersion>latest</LangVersion></PropertyGroup></Project>",
+            );
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .hash_task_contents(HashTaskContentsInput {
+                    project: fragment("app-tests", "app-tests"),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            assert_eq!(output.contents.len(), 1);
+            let contents = &output.contents[0];
+
+            assert_eq!(contents["packages"]["xunit"].as_str().unwrap(), "2.8.0");
+            assert_eq!(
+                contents["packages"]["Microsoft.NET.Test.Sdk"]
+                    .as_str()
+                    .unwrap(),
+                "17.10.0"
+            );
+
+            let props = contents["props"].as_object().unwrap();
+            assert_eq!(props.len(), 1);
+            assert!(
+                props
+                    .values()
+                    .next()
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .contains("LangVersion")
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn skips_projects_without_dotnet_toolchain() {
+            let sandbox = create_moon_sandbox("projects");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let mut project = fragment("app", "app");
+            project.toolchains = vec![];
+
+            let output = plugin
+                .hash_task_contents(HashTaskContentsInput {
+                    project,
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            assert!(output.contents.is_empty());
+        }
+    }
+
+    mod prune_docker {
+        use super::*;
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn removes_bin_and_obj_dirs() {
+            let sandbox = create_empty_moon_sandbox();
+            sandbox.create_file("app/bin/Debug/x.dll", "");
+            sandbox.create_file("app/obj/project.assets.json", "");
+            sandbox.create_file("app/keep.cs", "");
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .prune_docker(PruneDockerInput {
+                    projects: vec![moon_pdk_api::ProjectFragment {
+                        id: Id::raw("app"),
+                        source: "app".into(),
+                        ..Default::default()
+                    }],
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    ..Default::default()
+                })
+                .await;
+
+            assert!(!sandbox.path().join("app/bin").exists());
+            assert!(!sandbox.path().join("app/obj").exists());
+            assert!(sandbox.path().join("app/keep.cs").exists());
+
+            assert_eq!(
+                output.changed_files,
+                vec![
+                    PathBuf::from("/workspace/app/bin"),
+                    PathBuf::from("/workspace/app/obj"),
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn does_nothing_without_bin_obj() {
+            let sandbox = create_empty_moon_sandbox();
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .prune_docker(PruneDockerInput {
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    ..Default::default()
+                })
+                .await;
+
+            assert!(output.changed_files.is_empty());
+        }
+    }
+
     mod extend_task_command {
         use super::*;
 

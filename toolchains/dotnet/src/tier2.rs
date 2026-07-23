@@ -1,12 +1,16 @@
 use crate::config::DotnetToolchainConfig;
 use crate::msbuild::{evaluate_project, normalize_path_key};
+use crate::nuget_lock::parse_lock_file;
 use extism_pdk::*;
-use moon_config::{DependencyScope, PartialTaskArgs, PartialTaskConfig};
+use moon_config::{
+    DependencyScope, PartialTaskArgs, PartialTaskConfig, UnresolvedVersionSpec, VersionSpec,
+};
 use moon_pdk::{
     HostLogInput, HostLogTarget, command_exists, get_host_env_var, get_host_environment,
-    host_log, locate_root, parse_toolchain_config, plugin_err,
+    host_log, is_project_toolchain_enabled, locate_root, parse_toolchain_config, plugin_err,
 };
 use moon_pdk_api::*;
+use starbase_utils::fs;
 use std::collections::BTreeMap;
 
 #[host_fn]
@@ -43,6 +47,40 @@ fn find_project_files(dir: &VirtualPath) -> Vec<VirtualPath> {
     }
 
     found
+}
+
+/// Directories that never contain a `packages.lock.json` worth finding.
+const SKIP_DIRS: &[&str] = &["bin", "obj", "node_modules", ".git", ".moon"];
+
+/// Depth-limited search for any `packages.lock.json` under a directory.
+/// Lock files live next to each project file, not at the dependencies root,
+/// so a root-only check would miss them.
+fn contains_lockfile(dir: &VirtualPath, depth: u8) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir.any_path()) else {
+        return false;
+    };
+
+    let mut subdirs = vec![];
+
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+
+        let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+
+        if !is_dir {
+            if name == "packages.lock.json" {
+                return true;
+            }
+        } else if depth > 0 && !SKIP_DIRS.iter().any(|skip| skip.eq_ignore_ascii_case(&name)) {
+            subdirs.push(name);
+        }
+    }
+
+    subdirs
+        .into_iter()
+        .any(|name| contains_lockfile(&dir.join(name), depth - 1))
 }
 
 /// Does a directory directly contain a solution file (*.sln / *.slnx)?
@@ -319,6 +357,205 @@ pub fn extend_project_graph(
 
         if !project_output.dependencies.is_empty() || !project_output.tasks.is_empty() {
             output.extended_projects.insert(id.to_owned(), project_output);
+        }
+    }
+
+    Ok(Json(output))
+}
+
+#[plugin_fn]
+pub fn install_dependencies(
+    Json(input): Json<InstallDependenciesInput>,
+) -> FnResult<Json<InstallDependenciesOutput>> {
+    let config = parse_toolchain_config::<DotnetToolchainConfig>(input.toolchain_config)?;
+    let mut output = InstallDependenciesOutput::default();
+
+    let mut args: Vec<String> = vec!["restore".into()];
+
+    // The mere presence of a lock file opts a project into lock-file restore;
+    // --locked-mode additionally fails restore (NU1004) when declared
+    // dependencies drifted from the lock file.
+    if contains_lockfile(&input.root, 5) {
+        args.push("--locked-mode".into());
+    }
+
+    args.extend(config.restore_args.iter().cloned());
+
+    output.install_command = Some(
+        ExecCommandInput::new("dotnet", args)
+            .cwd(input.root.clone())
+            .into(),
+    );
+    // NuGet has no dedupe concept.
+    output.dedupe_command = None;
+
+    Ok(Json(output))
+}
+
+#[plugin_fn]
+pub fn parse_lock(Json(input): Json<ParseLockInput>) -> FnResult<Json<ParseLockOutput>> {
+    let mut output = ParseLockOutput::default();
+    let lock = parse_lock_file(&fs::read_file(&input.path)?)?;
+
+    // Dedupe identical entries across target frameworks.
+    for entries in lock.dependencies.into_values() {
+        for (name, entry) in entries {
+            // Project-type entries are in-repo ProjectReferences, not packages.
+            if entry.dep_type.eq_ignore_ascii_case("Project") {
+                continue;
+            }
+
+            let versions = output.dependencies.entry(name).or_default();
+
+            let version = entry
+                .resolved
+                .as_deref()
+                .and_then(|value| VersionSpec::parse(value).ok());
+
+            let already_present = versions.iter().any(|existing: &LockDependency| {
+                existing.version == version && existing.hash == entry.content_hash
+            });
+
+            if !already_present {
+                versions.push(LockDependency {
+                    hash: entry.content_hash,
+                    meta: None,
+                    // NuGet ranges like "[13.0.3, )" may not parse; omit then.
+                    req: entry
+                        .requested
+                        .as_deref()
+                        .and_then(|value| UnresolvedVersionSpec::parse(value).ok()),
+                    version,
+                });
+            }
+        }
+    }
+
+    Ok(Json(output))
+}
+
+#[plugin_fn]
+pub fn hash_task_contents(
+    Json(input): Json<HashTaskContentsInput>,
+) -> FnResult<Json<HashTaskContentsOutput>> {
+    let mut output = HashTaskContentsOutput::default();
+
+    if !is_project_toolchain_enabled(&input.project) {
+        return Ok(Json(output));
+    }
+
+    let project_root = input.context.get_project_root(&input.project);
+    let lockfile = project_root.join("packages.lock.json");
+
+    // Lock file present: its content already pins the entire resolved
+    // package set (incl. contentHashes) — include it raw.
+    if lockfile.exists() {
+        output.contents.push(json::json!({
+            "lockfile": fs::read_file(&lockfile)?,
+        }));
+
+        return Ok(Json(output));
+    }
+
+    // No lock file: hash the *evaluated* PackageReference set plus the
+    // contents of every Directory.Build.props / Directory.Packages.props
+    // from the project dir up to the workspace root (conditions/imports can
+    // make any of them affect the resolved set).
+    //
+    // Cache the evaluated package set per project within this plugin
+    // instance — hash_task_contents runs once per task and MSBuild
+    // evaluation costs ~0.5s.
+    let cache_key = format!("eval-packages:{}", input.project.id);
+
+    let packages: BTreeMap<String, String> = if let Some(cached) =
+        var::get::<String>(&cache_key)?
+    {
+        serde_json::from_str(&cached)?
+    } else {
+        let mut packages = BTreeMap::new();
+        let env = get_host_environment()?;
+
+        if command_exists(&env, "dotnet") {
+            for file in find_project_files(&project_root) {
+                let Some(real_path) = file.real_path() else {
+                    continue;
+                };
+
+                match evaluate_project(&real_path) {
+                    Ok(evaluation) => {
+                        packages.extend(evaluation.package_references());
+                    }
+                    Err(error) => {
+                        host_log!(
+                            warn,
+                            "MSBuild evaluation failed while hashing <id>{}</id>: {}",
+                            input.project.id,
+                            error
+                        );
+                    }
+                }
+            }
+        }
+
+        var::set(&cache_key, serde_json::to_string(&packages)?)?;
+
+        packages
+    };
+
+    let mut props: BTreeMap<String, String> = BTreeMap::new();
+    let workspace_root = &input.context.workspace_root;
+    let mut current = Some(project_root.clone());
+
+    while let Some(dir) = current {
+        for name in ["Directory.Build.props", "Directory.Packages.props"] {
+            let file = dir.join(name);
+
+            if file.exists() {
+                let key = file
+                    .virtual_path()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .unwrap_or_else(|| name.to_string());
+
+                props.insert(key, fs::read_file(&file)?);
+            }
+        }
+
+        if dir.any_path() == workspace_root.any_path() {
+            break;
+        }
+
+        current = dir.parent();
+    }
+
+    output.contents.push(json::json!({
+        "packages": packages,
+        "props": props,
+    }));
+
+    Ok(Json(output))
+}
+
+#[plugin_fn]
+pub fn prune_docker(Json(input): Json<PruneDockerInput>) -> FnResult<Json<PruneDockerOutput>> {
+    let mut output = PruneDockerOutput::default();
+
+    let mut roots = vec![input.root.clone()];
+
+    for project in &input.projects {
+        roots.push(input.context.get_project_root(project));
+    }
+
+    for root in roots {
+        for dir_name in ["bin", "obj"] {
+            let dir = root.join(dir_name);
+
+            if dir.exists() {
+                fs::remove_dir_all(&dir)?;
+
+                if let Some(file) = dir.virtual_path() {
+                    output.changed_files.push(file);
+                }
+            }
         }
     }
 

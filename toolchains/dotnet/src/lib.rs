@@ -1,5 +1,6 @@
 pub mod config;
 pub mod msbuild;
+pub mod nuget_lock;
 
 #[cfg(feature = "wasm")]
 mod tier1;

@@ -64,6 +64,10 @@ pub fn define_docker_metadata(
             "**/nuget.config".into(),
             "**/packages.lock.json".into(),
             "global.json".into(),
+            // bin/obj contain generated *.props (obj/*.nuget.g.props) and
+            // must never end up in the restore layer.
+            "!**/bin/**".into(),
+            "!**/obj/**".into(),
         ],
     }))
 }

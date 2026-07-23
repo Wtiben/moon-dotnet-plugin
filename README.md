@@ -27,6 +27,43 @@ is expected to come from either:
 > user-level cache directory, the plugin only treats it as a DOTNET_ROOT when the
 > `dotnet` executable actually exists at its root.
 
+## ⚠️ Hashing without a lock file is approximate
+
+Without `packages.lock.json`, moon's task hashes are computed from the
+**declared/evaluated** `PackageReference` set (plus the contents of
+`Directory.Build.props` / `Directory.Packages.props` up the tree) — floating
+versions (`1.*`) and unpinned transitive upgrades will **NOT** invalidate caches.
+
+**Commit `packages.lock.json`** (generate it with `dotnet restore --use-lock-file`)
+for exact hashing: the plugin then hashes the raw lock file content (which pins the
+full resolved set including content hashes) and automatically passes `--locked-mode`
+to `dotnet restore` during dependency installation, failing fast (NU1004) when the
+lock file drifts from the declared dependencies.
+
+Note: moon's install-dependencies action fingerprints only the lock file (this
+toolchain registers no manifest file names), so editing a `.csproj` alone does not
+re-trigger the install action until the lock file changes too — another reason to
+keep lock files committed and current.
+
+## Docker
+
+- `moon docker scaffold <project>`: the configs phase copies exactly the
+  restore-relevant files (`*.csproj`/`*.sln`/`*.props`/`nuget.config`/
+  `packages.lock.json`/`global.json`), with `bin`/`obj` explicitly excluded
+  (generated `obj/*.nuget.g.props` would otherwise match). The sources phase
+  copies full project sources by moon design.
+- `prune_docker` removes `bin`/`obj` directories in the dependencies root and
+  each focused project. NuGet's user-level cache is not touched in v1.
+- Add `.moon/cache` (and ideally `.moon/docker`) to `.dockerignore`.
+
+## Task inference (`inferTasks`, experimental)
+
+When enabled, projects evaluating `IsTestProject=true` **or** referencing
+`Microsoft.NET.Test.Sdk` get a `test` task (`dotnet test`), and `OutputType`
+`Exe`/`WinExe` projects get a `run` task (`dotnet run`). Note `IsTestProject`
+is only set by the test SDK's build props after a restore, hence the package
+reference fallback. Off by default.
+
 ## Development notes
 
 - Build: `cargo build --target wasm32-wasip1`
