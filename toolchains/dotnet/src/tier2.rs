@@ -219,9 +219,14 @@ pub fn extend_project_graph(
 
     // Pass 1: locate every project's MSBuild project files, and index their
     // host-real paths (normalized) so ProjectReference targets can be
-    // resolved back to moon project ids.
+    // resolved back to moon project ids. A secondary index on the
+    // workspace-relative suffix ("<source>/<file>") covers cases where the
+    // exact real paths differ lexically — e.g. Windows 8.3 short names in
+    // the workspace prefix (MSBuild prints expanded long paths).
     let mut project_files: BTreeMap<Id, Vec<VirtualPath>> = BTreeMap::new();
     let mut real_path_index: BTreeMap<String, Id> = BTreeMap::new();
+    // suffix -> Some(id), or None when two projects share a suffix (ambiguous).
+    let mut suffix_index: BTreeMap<String, Option<Id>> = BTreeMap::new();
 
     for (id, source) in &input.project_sources {
         let project_root = input.context.workspace_root.join(source);
@@ -238,6 +243,20 @@ pub fn extend_project_graph(
                     normalize_path_key(&real.to_string_lossy()),
                     id.to_owned(),
                 );
+            }
+
+            if let Some(name) = file.file_name().and_then(|name| name.to_str()) {
+                let source = source.trim_matches('/');
+                let suffix = if source.is_empty() || source == "." {
+                    normalize_path_key(&format!("/{name}"))
+                } else {
+                    normalize_path_key(&format!("/{source}/{name}"))
+                };
+
+                suffix_index
+                    .entry(suffix)
+                    .and_modify(|existing| *existing = None)
+                    .or_insert_with(|| Some(id.to_owned()));
             }
         }
 
@@ -287,7 +306,16 @@ pub fn extend_project_graph(
                 for reference in evaluation.project_reference_paths() {
                     let key = normalize_path_key(&reference);
 
-                    let Some(dep_id) = real_path_index.get(&key) else {
+                    // Exact real-path match first; fall back to the unique
+                    // workspace-relative suffix.
+                    let matched = real_path_index.get(&key).or_else(|| {
+                        suffix_index
+                            .iter()
+                            .find(|(suffix, id)| id.is_some() && key.ends_with(suffix.as_str()))
+                            .and_then(|(_, id)| id.as_ref())
+                    });
+
+                    let Some(dep_id) = matched else {
                         host_log!(
                             debug,
                             "Project <id>{}</id> references {} which is outside the moon workspace; skipping",

@@ -448,7 +448,15 @@ mod dotnet_toolchain_tier2 {
                 .await;
 
             let root = output.env.get("DOTNET_ROOT").expect("DOTNET_ROOT not set");
-            assert!(root.contains(".dotnet"));
+
+            // An ambient DOTNET_ROOT (e.g. set by actions/setup-dotnet on CI
+            // runners) legitimately takes precedence over the home-dir
+            // fallback; only assert the fallback value when none is set.
+            match std::env::var("DOTNET_ROOT") {
+                Ok(ambient) if !ambient.is_empty() => assert_eq!(root, &ambient),
+                _ => assert!(root.contains(".dotnet")),
+            }
+
             assert_eq!(output.paths.len(), 1);
         }
 
