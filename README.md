@@ -123,7 +123,11 @@ reference fallback. Off by default.
 - Test: `cargo test --workspace --no-default-features` (requires the wasm to be built first)
 - Or both: `bash scripts/build-and-test.sh`
 - On this dev machine the host toolchain is `x86_64-pc-windows-gnu` (no MSVC C++ build
-  tools installed; the GNU toolchain ships a self-contained linker).
+  tools installed; the GNU toolchain ships a self-contained linker). The repo's
+  `rust-toolchain.toml` (required by `moonrepo/build-wasm-plugin` to select
+  `wasm32-wasip1` — without it the action tries the removed `wasm32-wasi` target)
+  would resolve to the MSVC host toolchain, so a rustup directory override keeps
+  local builds on GNU: `rustup override set stable-x86_64-pc-windows-gnu --path .`
 
 ### moon workspace facts (verified against moon 2.3.3)
 
