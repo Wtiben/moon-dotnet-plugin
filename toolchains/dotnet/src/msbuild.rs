@@ -244,14 +244,31 @@ pub fn parse_batch_output(stdout: &str) -> AnyResult<BTreeMap<String, MsbuildEva
 /// Given the output of a failed batch invocation, find which of the input
 /// projects MSBuild reported errors for. Error lines carry the
 /// locale-invariant `<full path>(line,col): error CODE:` prefix, so a
-/// normalized `<path>(` substring match identifies the offenders without
-/// parsing localized message text.
+/// normalized substring match identifies the offenders without parsing
+/// localized message text. Only the trailing `<parent>/<file>(` suffix is
+/// matched, not the full path: MSBuild prints expanded long paths, which
+/// can differ lexically from the paths we passed (e.g. Windows 8.3 short
+/// names like `RUNNER~1` in a temp-dir prefix). A shared suffix across two
+/// projects merely over-excludes — those projects fall back to per-project
+/// evaluation, which stays correct.
 pub fn detect_failed_projects(output: &str, project_paths: &[String]) -> Vec<String> {
     let haystack = normalize_path_key(output);
 
     project_paths
         .iter()
-        .filter(|path| haystack.contains(&format!("{}(", normalize_path_key(path))))
+        .filter(|path| {
+            let normalized = normalize_path_key(path);
+
+            // From the second-to-last separator: "/<parent>/<file>" — the
+            // leading slash anchors the match to a component boundary.
+            let suffix = normalized
+                .rmatch_indices('/')
+                .nth(1)
+                .map(|(index, _)| &normalized[index..])
+                .unwrap_or(&normalized);
+
+            haystack.contains(&format!("{suffix}("))
+        })
         .cloned()
         .collect()
 }
@@ -558,6 +575,22 @@ mod tests {
         assert!(xml.contains("CustomAfterMicrosoftCommonCrossTargetingTargets=$(MSBuildThisFileDirectory)moon-eval.targets"));
         assert!(xml.contains("BuildInParallel=\"true\""));
         assert!(xml.contains("ContinueOnError=\"WarnAndContinue\""));
+    }
+
+    #[test]
+    fn detects_failed_projects_across_short_and_long_path_forms() {
+        // Real shape from GitHub's windows-latest runners: we pass a path
+        // with an 8.3 short-name prefix (from %TEMP%), MSBuild's error line
+        // prints the expanded long form.
+        let output = "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\scratch\\broken\\Broken.csproj(1,41): error MSB4025: The project file could not be loaded.";
+
+        let paths = vec![
+            "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\scratch\\broken/Broken.csproj".to_string(),
+            "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\scratch\\ok\\Ok.csproj".to_string(),
+        ];
+
+        assert_eq!(detect_failed_projects(output, &paths), vec![paths[0].clone()]);
+        assert!(detect_failed_projects("no errors here", &paths).is_empty());
     }
 
     #[test]
