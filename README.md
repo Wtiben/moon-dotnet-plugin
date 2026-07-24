@@ -117,6 +117,31 @@ When enabled, projects evaluating `IsTestProject=true` **or** referencing
 is only set by the test SDK's build props after a restore, hence the package
 reference fallback. Off by default.
 
+## Releasing
+
+Releases are tag-driven and gated. To publish version `X.Y.Z`:
+
+1. Bump `version` in `toolchains/dotnet/Cargo.toml`.
+2. Add a `## X.Y.Z` entry to `toolchains/dotnet/CHANGELOG.md`.
+3. Commit, then: `git tag vX.Y.Z && git push origin main vX.Y.Z`
+
+The Release workflow then enforces, in order: the full CI test matrix (ubuntu +
+windows), tag == crate version, changelog entry exists, and a smoke test that loads
+the exact built wasm with a pinned moon binary (`MOON_SMOKE_VERSION` in
+`release.yml` — bump it deliberately). Only after all gates pass does it publish the
+ghcr.io OCI artifact and create the GitHub release (with `immutableCreate`, so assets
+are locked after creation).
+
+Guarantees:
+
+- A commit that fails tests cannot be released, even if tagged.
+- A tag that doesn't match the crate version (or lacks a changelog entry) fails fast.
+- Published `v*` tags cannot be deleted or moved (repository ruleset
+  "protect-release-tags"); re-releasing a version is a hard error. The escape hatch
+  is deliberately manual: temporarily disable the ruleset in repo settings.
+- The verify path can be dry-run anytime via the workflow's "Run workflow" button
+  (`workflow_dispatch`) — publishing steps only ever run on tag pushes.
+
 ## Development notes
 
 - Build: `cargo build --target wasm32-wasip1`
