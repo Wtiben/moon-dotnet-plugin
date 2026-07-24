@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+#### 🚀 Features
+
+- Project-graph MSBuild evaluation is now batched: a single traversal invocation evaluates
+  every project in parallel (in-process worker nodes, target injected via
+  `CustomAfterMicrosoftCommon(CrossTargeting)Targets`) instead of spawning one `dotnet msbuild`
+  process per project — a 60-project workspace went from ~3 minutes to ~11 seconds in local
+  measurements. Per-project evaluation remains as an automatic fallback for anything missing
+  from the batch output.
+
 ## 0.1.0
 
 #### 🚀 Features

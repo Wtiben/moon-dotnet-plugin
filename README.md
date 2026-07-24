@@ -14,7 +14,13 @@ Provides:
 
 Dependency extraction shells out to MSBuild instead of statically parsing XML, so
 `Directory.Build.props` chains, Central Package Management, SDK defaults, and
-`Condition`s all resolve correctly. This costs ~0.5s per project per graph build.
+`Condition`s all resolve correctly. All projects are evaluated in **one batched
+MSBuild invocation** — a generated traversal project (under
+`.moon/cache/dotnet-toolchain/`) fans out to every project with parallel in-process
+worker nodes — so the dotnet/MSBuild startup cost is paid once per graph build
+instead of once per project (~11s vs ~3min for a 60-project workspace in local
+measurements). Any project missing from the batch output (e.g. a broken csproj)
+automatically falls back to individual evaluation.
 
 ## Usage
 

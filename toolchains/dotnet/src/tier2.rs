@@ -1,5 +1,5 @@
 use crate::config::DotnetToolchainConfig;
-use crate::msbuild::{evaluate_project, normalize_path_key};
+use crate::msbuild::{evaluate_project, evaluate_projects_batch, normalize_path_key};
 use crate::nuget_lock::parse_lock_file;
 use extism_pdk::*;
 use moon_config::{
@@ -275,8 +275,33 @@ pub fn extend_project_graph(
         ));
     }
 
-    // Pass 2: evaluate each project and map its ProjectReference items onto
-    // moon project ids.
+    // Pass 2: evaluate every project with a single batched MSBuild
+    // invocation (one process, parallel in-process evaluation) — the
+    // dotnet/MSBuild startup cost dominates per-project evaluation, so this
+    // is the difference between minutes and seconds on large workspaces.
+    // Anything missing from the batch (broken project, batch-level failure)
+    // falls back to per-project evaluation below, keeping the batch purely
+    // an optimization.
+    let all_project_paths = project_files
+        .values()
+        .flatten()
+        .filter_map(|file| file.real_path())
+        .collect::<Vec<_>>();
+
+    let mut batch = match evaluate_projects_batch(&input.context.workspace_root, &all_project_paths)
+    {
+        Ok(results) => results,
+        Err(error) => {
+            host_log!(
+                warn,
+                "Batched MSBuild evaluation failed; falling back to per-project evaluation: {}",
+                error
+            );
+            BTreeMap::new()
+        }
+    };
+
+    // Pass 3: map each project's ProjectReference items onto moon project ids.
     for (id, files) in &project_files {
         let mut project_output = ExtendProjectOutput::default();
         let mut seen_deps: BTreeMap<Id, ()> = BTreeMap::new();
@@ -286,19 +311,25 @@ pub fn extend_project_graph(
                 continue;
             };
 
-            let evaluation = match evaluate_project(&real_path) {
-                Ok(evaluation) => evaluation,
-                Err(error) => {
-                    // One broken project must not take down graph
-                    // construction for the whole workspace.
-                    host_log!(
-                        warn,
-                        "MSBuild evaluation failed for project <id>{}</id> ({}): {}",
-                        id,
-                        real_path.display(),
-                        error
-                    );
-                    continue;
+            let batch_key = normalize_path_key(&real_path.to_string_lossy());
+
+            let evaluation = if let Some(evaluation) = batch.remove(&batch_key) {
+                evaluation
+            } else {
+                match evaluate_project(&real_path) {
+                    Ok(evaluation) => evaluation,
+                    Err(error) => {
+                        // One broken project must not take down graph
+                        // construction for the whole workspace.
+                        host_log!(
+                            warn,
+                            "MSBuild evaluation failed for project <id>{}</id> ({}): {}",
+                            id,
+                            real_path.display(),
+                            error
+                        );
+                        continue;
+                    }
                 }
             };
 
