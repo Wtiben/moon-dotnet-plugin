@@ -1,0 +1,4 @@
+projects:
+  - 'app'
+  - 'lib'
+  - 'core'

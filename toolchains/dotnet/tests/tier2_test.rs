@@ -42,6 +42,49 @@ mod dotnet_toolchain_tier2 {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        async fn finds_slnx_root_from_nested_dir() {
+            let sandbox = create_empty_moon_sandbox();
+            // .slnx is a marker only — content is never parsed.
+            sandbox.create_file("App.slnx", "<Solution>\n</Solution>\n");
+            sandbox.create_file(
+                "nested/proj/Proj.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />",
+            );
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .locate_dependencies_root(LocateDependenciesRootInput {
+                    starting_dir: VirtualPath::Real(sandbox.path().join("nested/proj")),
+                    ..Default::default()
+                })
+                .await;
+
+            assert_eq!(output.root.unwrap(), PathBuf::from("/workspace"));
+            assert!(output.members.is_none());
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn falls_back_to_alternate_lock_file_name() {
+            let sandbox = create_empty_moon_sandbox();
+            sandbox.create_file(
+                "proj/packages.Proj.lock.json",
+                r#"{"version": 1, "dependencies": {}}"#,
+            );
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .locate_dependencies_root(LocateDependenciesRootInput {
+                    starting_dir: VirtualPath::Real(sandbox.path().join("proj")),
+                    ..Default::default()
+                })
+                .await;
+
+            assert_eq!(output.root.unwrap(), PathBuf::from("/workspace/proj"));
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         async fn returns_none_when_nothing_found() {
             let sandbox = create_empty_moon_sandbox();
             sandbox.create_file("empty/dir/marker.txt", "");
@@ -143,6 +186,39 @@ mod dotnet_toolchain_tier2 {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        async fn infers_dependencies_across_languages() {
+            let sandbox = create_moon_sandbox("mixed-lang");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let mut input = ExtendProjectGraphInput::default();
+            input.project_sources.insert(Id::raw("app"), "app".into());
+            input.project_sources.insert(Id::raw("lib"), "lib".into());
+            input.project_sources.insert(Id::raw("core"), "core".into());
+            input.toolchain_config = json!({ "inferDependencies": true });
+
+            let output = plugin.extend_project_graph(input).await;
+
+            // C# -> F# -> VB project references all resolve; MSBuild
+            // evaluation is language-agnostic.
+            let app = &output.extended_projects[&Id::raw("app")];
+            assert_eq!(app.dependencies[0].id, Id::raw("lib"));
+
+            let lib = &output.extended_projects[&Id::raw("lib")];
+            assert_eq!(lib.dependencies[0].id, Id::raw("core"));
+
+            assert!(
+                output
+                    .input_files
+                    .contains(&PathBuf::from("/workspace/lib/Lib.fsproj"))
+            );
+            assert!(
+                output
+                    .input_files
+                    .contains(&PathBuf::from("/workspace/core/Core.vbproj"))
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         async fn broken_project_does_not_abort_graph() {
             let sandbox = create_moon_sandbox("projects");
             sandbox.create_file("core/Core.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><broken");
@@ -185,6 +261,31 @@ mod dotnet_toolchain_tier2 {
         #[tokio::test(flavor = "multi_thread")]
         async fn locked_mode_when_lockfile_present() {
             let sandbox = create_moon_sandbox("locked");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .install_dependencies(InstallDependenciesInput {
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            let command = output.install_command.unwrap().command;
+            assert_eq!(
+                command.args,
+                vec!["restore".to_string(), "--locked-mode".to_string()]
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn locked_mode_with_alternate_lock_name() {
+            let sandbox = create_empty_moon_sandbox();
+            sandbox.create_file(
+                "proj/packages.Proj.lock.json",
+                r#"{"version": 1, "dependencies": {}}"#,
+            );
+
             let plugin = sandbox.create_toolchain("dotnet").await;
 
             let output = plugin
@@ -287,9 +388,98 @@ mod dotnet_toolchain_tier2 {
                 .await;
 
             assert_eq!(output.contents.len(), 1);
-            let lock_text = output.contents[0]["lockfile"].as_str().unwrap();
+            let lockfiles = output.contents[0]["lockfiles"].as_object().unwrap();
+            let lock_text = lockfiles["/workspace/proj/packages.lock.json"]
+                .as_str()
+                .unwrap();
             assert!(lock_text.contains("Newtonsoft.Json"));
             assert!(lock_text.contains("contentHash"));
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn lockfile_branch_still_hashes_config_files() {
+            let sandbox = create_moon_sandbox("locked");
+            // Even with the package set pinned by the lock file, props/targets
+            // change build behavior and must contribute to the hash.
+            sandbox.create_file(
+                "Directory.Build.props",
+                "<Project><PropertyGroup><LangVersion>12</LangVersion></PropertyGroup></Project>",
+            );
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .hash_task_contents(HashTaskContentsInput {
+                    project: fragment("proj", "proj"),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            let contents = &output.contents[0];
+            assert!(contents["lockfiles"].is_object());
+            let configs = contents["configs"].as_object().unwrap();
+            assert!(
+                configs["/workspace/Directory.Build.props"]
+                    .as_str()
+                    .unwrap()
+                    .contains("LangVersion")
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn alternate_lock_file_name_takes_lock_branch() {
+            let sandbox = create_moon_sandbox("projects");
+            // `packages.<project>.lock.json` via NuGetLockFilePath.
+            sandbox.create_file(
+                "app/packages.App.lock.json",
+                r#"{"version": 1, "dependencies": {}}"#,
+            );
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .hash_task_contents(HashTaskContentsInput {
+                    project: fragment("app", "app"),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            let contents = &output.contents[0];
+            let lockfiles = contents["lockfiles"].as_object().unwrap();
+            assert!(lockfiles.contains_key("/workspace/app/packages.App.lock.json"));
+            // Lock branch: no MSBuild evaluation happens.
+            assert!(contents.get("packages").is_none());
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn hashes_all_config_file_kinds() {
+            let sandbox = create_moon_sandbox("projects");
+            // Valid-but-harmless contents: MSBuild auto-imports
+            // Directory.Build.targets and auto-applies Directory.Build.rsp,
+            // so garbage would break evaluation of the fixture projects.
+            sandbox.create_file("core/Directory.Build.targets", "<Project />");
+            sandbox.create_file("Directory.Build.rsp", "");
+            sandbox.create_file("NuGet.Config", "<configuration />");
+            sandbox.create_file("global.json", "{}");
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .hash_task_contents(HashTaskContentsInput {
+                    project: fragment("core", "core"),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            let configs = output.contents[0]["configs"].as_object().unwrap();
+            assert!(configs.contains_key("/workspace/core/Directory.Build.targets"));
+            assert!(configs.contains_key("/workspace/Directory.Build.rsp"));
+            // Actual (non-lowercase) file name is preserved in the key.
+            assert!(configs.contains_key("/workspace/NuGet.Config"));
+            assert!(configs.contains_key("/workspace/global.json"));
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -321,16 +511,46 @@ mod dotnet_toolchain_tier2 {
                 "17.10.0"
             );
 
-            let props = contents["props"].as_object().unwrap();
-            assert_eq!(props.len(), 1);
+            let configs = contents["configs"].as_object().unwrap();
+            assert_eq!(configs.len(), 1);
             assert!(
-                props
+                configs
                     .values()
                     .next()
                     .unwrap()
                     .as_str()
                     .unwrap()
                     .contains("LangVersion")
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn central_package_management_hashes_via_props() {
+            let sandbox = create_moon_sandbox("cpm");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .hash_task_contents(HashTaskContentsInput {
+                    project: fragment("proj", "proj"),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            let contents = &output.contents[0];
+
+            // CPM applies versions during restore, not evaluation, so the
+            // versionless PackageReference surfaces as "*" — the pinned
+            // version reaches the hash through the Directory.Packages.props
+            // content below, which is what keeps caching correct.
+            assert_eq!(contents["packages"]["Newtonsoft.Json"].as_str().unwrap(), "*");
+
+            let configs = contents["configs"].as_object().unwrap();
+            assert!(
+                configs["/workspace/Directory.Packages.props"]
+                    .as_str()
+                    .unwrap()
+                    .contains("13.0.3")
             );
         }
 

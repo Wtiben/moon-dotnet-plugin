@@ -29,6 +29,21 @@ mod dotnet_toolchain_tier1 {
                     .config_file_globs
                     .contains(&"*.{csproj,fsproj,vbproj}".to_string())
             );
+            assert!(
+                output
+                    .config_file_globs
+                    .contains(&"Directory.Build.targets".to_string())
+            );
+            assert!(
+                output
+                    .config_file_globs
+                    .contains(&"{nuget,NuGet}.{config,Config}".to_string())
+            );
+            assert!(
+                output
+                    .config_file_globs
+                    .contains(&"packages.*.lock.json".to_string())
+            );
         }
     }
 
@@ -60,6 +75,12 @@ mod dotnet_toolchain_tier1 {
                 output
                     .scaffold_globs
                     .contains(&"**/packages.lock.json".to_string())
+            );
+            assert!(output.scaffold_globs.contains(&"**/*.targets".to_string()));
+            assert!(
+                output
+                    .scaffold_globs
+                    .contains(&"**/packages.*.lock.json".to_string())
             );
         }
     }

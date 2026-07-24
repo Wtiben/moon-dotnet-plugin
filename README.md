@@ -1,10 +1,12 @@
 # moon-dotnet-plugin
 
-A [moon](https://moonrepo.dev) 2.x toolchain WASM plugin for the .NET ecosystem (SDK-style C# projects).
+A [moon](https://moonrepo.dev) 2.x toolchain WASM plugin for the .NET ecosystem
+(SDK-style C#, F#, and VB projects).
 
 Provides:
 
-- **Tier 1** — project usage detection (`*.csproj`/`*.sln`/`global.json`/props files),
+- **Tier 1** — project usage detection (`*.{csproj,fsproj,vbproj}`/`*.{sln,slnx}`/
+  `global.json`/`Directory.Build.*`/`Directory.Packages.props`/`nuget.config`),
   config schema, Docker metadata & scaffold globs.
 - **Tier 2** — moon project-graph dependencies inferred from **real MSBuild evaluation**
   of `ProjectReference` items (`dotnet msbuild -getProperty/-getItem`, .NET SDK 8+),
@@ -14,13 +16,23 @@ Provides:
 
 Dependency extraction shells out to MSBuild instead of statically parsing XML, so
 `Directory.Build.props` chains, Central Package Management, SDK defaults, and
-`Condition`s all resolve correctly. All projects are evaluated in **one batched
-MSBuild invocation** — a generated traversal project (under
+`Condition`s all resolve correctly — these need no special handling in the plugin
+because the real evaluation engine resolves them. All projects are evaluated in
+**one batched MSBuild invocation** — a generated traversal project (under
 `.moon/cache/dotnet-toolchain/`) fans out to every project with parallel in-process
 worker nodes — so the dotnet/MSBuild startup cost is paid once per graph build
 instead of once per project (~11s vs ~3min for a 60-project workspace in local
 measurements). Any project missing from the batch output (e.g. a broken csproj)
 automatically falls back to individual evaluation.
+
+Because MSBuild evaluation is language-agnostic, **`.fsproj` and `.vbproj` projects
+are fully supported**, including cross-language `ProjectReference`s (covered by the
+`mixed-lang` test fixture: C# → F# → VB). **Central Package Management**
+(`Directory.Packages.props` + versionless `PackageReference`) is likewise supported
+and test-covered: pinned versions reach the task hash through the
+`Directory.Packages.props` content hash. `.slnx` solution files act as dependency-root
+markers exactly like `.sln` (solution files are never parsed — moon's `workspace.yml`
+is the source of project discovery).
 
 ## Usage
 
@@ -42,7 +54,7 @@ For local development a `file://` locator also works:
 `moon.yml` (per project):
 
 ```yaml
-language: 'csharp'   # moon 2.3.3 rejects 'c#'
+language: 'csharp'   # moon rejects 'c#' (verified through 2.4.5)
 
 toolchains:
   default: 'dotnet'
@@ -59,9 +71,11 @@ Requires a .NET SDK 8+ (`-getProperty`/`-getItem` JSON output needs MSBuild 17.8
 
 ## Scope cuts (v1)
 
-SDK-style projects only (no legacy csproj), `dotnet` CLI only, C# focus (`.fsproj`/
-`.vbproj` may work incidentally, untested), no NuGet workloads, no global tools,
-outer-build evaluation only for multi-targeted projects. See FOLLOWUPS.md.
+SDK-style projects only (no legacy csproj), `dotnet` CLI only, no NuGet workloads,
+no global tools, outer-build evaluation only for multi-targeted projects. Custom
+`<Import>`s outside the `Directory.Build.*` conventions affect the *evaluated package
+set* (captured in hashes) but their file contents are not themselves hashed — build
+behavior changes in such files won't invalidate caches. See FOLLOWUPS.md.
 
 ## SDK installation (tier 3)
 
@@ -88,16 +102,23 @@ is expected to come from either:
 
 ## ⚠️ Hashing without a lock file is approximate
 
-Without `packages.lock.json`, moon's task hashes are computed from the
-**declared/evaluated** `PackageReference` set (plus the contents of
-`Directory.Build.props` / `Directory.Packages.props` up the tree) — floating
-versions (`1.*`) and unpinned transitive upgrades will **NOT** invalidate caches.
+Task hashes always include the contents of every `Directory.Build.props`,
+`Directory.Build.targets`, `Directory.Build.rsp`, `Directory.Packages.props`,
+`nuget.config` (any casing), and `global.json` from the project directory up to
+the workspace root — changing any of them invalidates affected task caches even
+when the package set is pinned by a lock file.
+
+Without a lock file, the package part of the hash is computed from the
+**declared/evaluated** `PackageReference` set — floating versions (`1.*`) and
+unpinned transitive upgrades will **NOT** invalidate caches.
 
 **Commit `packages.lock.json`** (generate it with `dotnet restore --use-lock-file`)
 for exact hashing: the plugin then hashes the raw lock file content (which pins the
 full resolved set including content hashes) and automatically passes `--locked-mode`
 to `dotnet restore` during dependency installation, failing fast (NU1004) when the
-lock file drifts from the declared dependencies.
+lock file drifts from the declared dependencies. Renamed lock files following the
+`packages.<project>.lock.json` convention (via `NuGetLockFilePath`) are recognized
+too.
 
 Note: moon's install-dependencies action fingerprints only the lock file (this
 toolchain registers no manifest file names), so editing a `.csproj` alone does not
@@ -107,10 +128,11 @@ keep lock files committed and current.
 ## Docker
 
 - `moon docker scaffold <project>`: the configs phase copies exactly the
-  restore-relevant files (`*.csproj`/`*.sln`/`*.props`/`nuget.config`/
-  `packages.lock.json`/`global.json`), with `bin`/`obj` explicitly excluded
-  (generated `obj/*.nuget.g.props` would otherwise match). The sources phase
-  copies full project sources by moon design.
+  restore-relevant files (`*.{csproj,fsproj,vbproj}`/`*.{sln,slnx}`/`*.props`/
+  `*.targets`/`Directory.Build.rsp`/`nuget.config`/lock files/`global.json`),
+  with `bin`/`obj` explicitly excluded (generated `obj/*.nuget.g.props` and
+  `obj/*.nuget.g.targets` would otherwise match). The sources phase copies full
+  project sources by moon design.
 - `prune_docker` removes `bin`/`obj` directories in the dependencies root and
   each focused project. NuGet's user-level cache is not touched in v1.
 - Add `.moon/cache` (and ideally `.moon/docker`) to `.dockerignore`.
@@ -160,15 +182,17 @@ Guarantees:
   would resolve to the MSVC host toolchain, so a rustup directory override keeps
   local builds on GNU: `rustup override set stable-x86_64-pc-windows-gnu --path .`
 
-### moon workspace facts (verified against moon 2.3.3)
+### moon workspace facts (verified against moon 2.3.3 and 2.4.5)
 
 - `moon toolchain info dotnet` requires the plugin locator as an explicit second
   argument (it does not read custom entries from `.moon/toolchains.yml`):
   `moon toolchain info dotnet "file://../moon-dotnet-plugin/target/wasm32-wasip1/debug/dotnet_toolchain.wasm"`.
   The locator is resolved relative to the current working directory.
-- In `moon.yml`, `language: 'c#'` is rejected by moon 2.3.3 ("Invalid fallback
-  variant"); use `language: 'csharp'`. The project-level toolchain key is
+- In `moon.yml`, `language: 'c#'` is rejected ("Invalid fallback variant");
+  use `language: 'csharp'`. The project-level toolchain key is
   `toolchains` (plural): `toolchains: { default: 'dotnet' }`.
+- moon 2.4.x introduced no toolchain WASM API changes (2.4.0 added built-in
+  Poetry/Ruby toolchains only); the plugin runs unmodified on 2.0–2.4.
 
 ### Test harness facts (verified against vendored sources)
 
