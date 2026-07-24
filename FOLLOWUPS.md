@@ -8,18 +8,11 @@
    project discovery; revisit only if moon grows a use for members. (CPM, alternate lock
    names, F#/VB, and `.slnx` marker behavior gained fixtures/tests in v0.2.)
 2. **Registry submission: moonrepo third-party plugin registry** — submit an entry once released.
-3. **Tier 3 proper: replace Phault delegation** — the archived `Phault/proto-dotnet-plugin`
-   (v0.3.0) fails on proto 0.58.2/Windows with `%1 is not a valid Win32 application. (os error
-   193)` during native install (extracts `~/.dotnet/sdk/<ver>` but never places the `dotnet` host
-   executable). Evaluate the `RemiKalbe/proto-dotnet-plugin` TOML plugin (registry default for
-   `dotnet`; installs version-per-directory with shims but does NOT handle the co-located
-   DOTNET_ROOT SDK layout) or implement our own `setup_toolchain` installing into a shared
-   `DOTNET_ROOT` (which alone flips `supports_tier_3` to true without proto tool functions).
-4. **Soak testing on a real multi-solution repo (N=50+ projects)** — measure the batched
+3. **Soak testing on a real multi-solution repo (N=50+ projects)** — measure the batched
    `extend_project_graph` wall time at scale (a single traversal invocation with parallel
    in-process evaluation; ~1s startup + well under 200ms/project marginal on a 60-project
    synthetic workspace). If cold graph builds still hurt on very large repos, add per-project
    eval-result caching keyed on hashes of the restore-relevant files.
-5. **parse_manifest, alias support, setup_environment, sync_project, NuGet cache pruning** —
+4. **parse_manifest, alias support, setup_environment, sync_project, NuGet cache pruning** —
    `parse_manifest` for csproj files, project `alias` from `AssemblyName`,
    `setup_environment`, `sync_project`, and NuGet user-cache handling in `prune_docker`.

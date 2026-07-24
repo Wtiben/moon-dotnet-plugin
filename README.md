@@ -13,6 +13,8 @@ Provides:
   `dotnet restore` dependency installs (with automatic `--locked-mode`), task-content
   hashing from lock files or the evaluated package set, `packages.lock.json` parsing,
   Docker pruning of `bin`/`obj`, and `DOTNET_ROOT` injection into task environments.
+- **Tier 3** — .NET SDK installation driven by `version:` in `.moon/toolchains.yml`,
+  via the official `dotnet-install` scripts into a shared `DOTNET_ROOT`.
 
 Dependency extraction shells out to MSBuild instead of statically parsing XML, so
 `Directory.Build.props` chains, Central Package Management, SDK defaults, and
@@ -40,7 +42,7 @@ is the source of project discovery).
 
 ```yaml
 dotnet:
-  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.1.0'
+  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.2.0'
   inferDependencies: true   # default
   inferTasks: false         # default; experimental
   restoreArgs: []           # extra args for `dotnet restore`
@@ -79,26 +81,32 @@ behavior changes in such files won't invalidate caches. See FOLLOWUPS.md.
 
 ## SDK installation (tier 3)
 
-This plugin does **not** install the .NET SDK itself — it exports no `setup_toolchain`
-or proto tool functions, so moon treats the toolchain as tier 1+2 only. A `version:`
-field under `dotnet:` in `.moon/toolchains.yml` will NOT drive an SDK install. The SDK
-is expected to come from either:
+Setting `version:` under `dotnet:` in `.moon/toolchains.yml` makes moon install the
+SDK during toolchain setup, using the official
+[dotnet-install scripts](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-install-script):
 
-1. **proto** via a community dotnet plugin, installing into `~/.dotnet`. The plugin's
-   `extend_task_command` injects `DOTNET_ROOT` + `PATH` into task environments when it
-   finds a real SDK layout there (or an explicit `dotnetRoot` setting / existing
-   `DOTNET_ROOT` env var).
-2. **A system-installed dotnet** on `PATH` — the always-working fallback. When no
-   DOTNET_ROOT candidate is found, `extend_task_command` is a no-op and tasks use
-   whatever `dotnet` resolves on the system.
+```yaml
+dotnet:
+  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.2.0'
+  version: '8.0'   # channel; or '8.0.404' (exact), 'lts', 'sts', 'preview'
+```
 
-> **Caveat**: the archived community plugin `Phault/proto-dotnet-plugin` (v0.3.0) was
-> tested on proto 0.58.2 on Windows and **fails during native install** with
-> `%1 is not a valid Win32 application. (os error 193)` — it extracts `~/.dotnet/sdk/<ver>`
-> but never places the `dotnet` host executable, leaving a broken root. See FOLLOWUPS.md
-> for the tracked replacement options. Because `~/.dotnet` is also the dotnet CLI's
-> user-level cache directory, the plugin only treats it as a DOTNET_ROOT when the
-> `dotnet` executable actually exists at its root.
+- Installs into **`~/.dotnet`** by default (SDK versions lay out side-by-side), or
+  into `dotnetRoot` when configured — the same root `extend_task_command` injects as
+  `DOTNET_ROOT`/`PATH`, so tasks find the installed SDK with no further wiring. The
+  user's shell profile is never touched (`--no-path`).
+- Version semantics pass through to the script: `X.Y` installs the latest patch of
+  that channel, fully-qualified versions install pinned (and short-circuit when that
+  exact SDK is already present), `lts`/`sts`/`preview` map to the named channels.
+- `global.json` stays a **runtime** concern: the dotnet host picks the matching SDK
+  out of `DOTNET_ROOT` at execution time; setup does not parse it. If `global.json`
+  demands a version that isn't installed, `dotnet` itself reports the error.
+
+Without a `version:` setting, moon skips toolchain setup ("use globals") and the SDK
+is expected from either a proto-managed install in `~/.dotnet` or a system `dotnet`
+on `PATH` — when no `DOTNET_ROOT` candidate exists, `extend_task_command` is a no-op.
+Because `~/.dotnet` doubles as the dotnet CLI's user-level cache directory, it only
+counts as a `DOTNET_ROOT` when the `dotnet` executable actually exists at its root.
 
 ## ⚠️ Hashing without a lock file is approximate
 
