@@ -13,6 +13,9 @@ on:
     tags:
       - 'v[0-9]+*'
   pull_request:
+  # Manual dry-run of the verify path (tests + build + smoke test).
+  # Publishing steps only ever run on tag pushes.
+  workflow_dispatch:
 
 env:
   # moon version used to smoke-test the built wasm. Bump deliberately — this
