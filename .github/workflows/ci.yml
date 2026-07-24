@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Allows the release workflow to gate publishing on this exact test matrix.
+  workflow_call:
 
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # For setup-rust

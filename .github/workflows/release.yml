@@ -14,31 +14,95 @@ on:
       - 'v[0-9]+*'
   pull_request:
 
+env:
+  # moon version used to smoke-test the built wasm. Bump deliberately — this
+  # is the compatibility contract the release is verified against.
+  MOON_SMOKE_VERSION: '2.3.3'
+
 jobs:
+  # The full CI test matrix (ubuntu + windows, all 30 tests) must pass before
+  # anything is built or published from a tag.
+  test:
+    name: Test
+    uses: ./.github/workflows/ci.yml
+
   build:
     name: Build
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # A tag must exactly match the crate version and have a changelog
+      # entry; otherwise the release would misreport its own version
+      # (plugin_version comes from CARGO_PKG_VERSION) and silently overwrite
+      # the ghcr tag derived from the crate version.
+      - name: Verify tag matches crate version
+        if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          CRATE=$(grep -m1 '^version' toolchains/dotnet/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$TAG" != "$CRATE" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match crate version ${CRATE} in toolchains/dotnet/Cargo.toml"
+            exit 1
+          fi
+
+      - name: Verify changelog entry exists
+        if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          if ! grep -q "^## ${TAG}" toolchains/dotnet/CHANGELOG.md; then
+            echo "::error::No '## ${TAG}' entry in toolchains/dotnet/CHANGELOG.md"
+            exit 1
+          fi
+
       - uses: moonrepo/setup-rust@v1
         with:
           cache: false
           targets: wasm32-wasip1
+
+      # First pass: build only (no publishing side effects yet).
       - id: build
         uses: moonrepo/build-wasm-plugin@v0
         with:
-          publish: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+          publish: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Load the EXACT bytes we are about to publish with a real moon binary.
+      # This catches broken exports, wasm-opt regressions, and moon
+      # incompatibilities that unit tests cannot see.
+      - name: Smoke test built wasm with moon
+        run: |
+          mkdir -p smoke/.moon
+          printf 'projects: []\n' > smoke/.moon/workspace.yml
+          cd smoke
+          git init -q .
+          npx --yes @moonrepo/cli@${MOON_SMOKE_VERSION} toolchain info dotnet \
+            "file://../builds/dotnet_toolchain.wasm" | tee info.txt
+          grep -F '.NET' info.txt
+          grep -F 'inferDependencies' info.txt
+
+      # Second pass: identical build (incremental, same toolchain) that also
+      # pushes the OCI artifact to ghcr.io. Only runs after the smoke test.
+      - id: publish
+        if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+        uses: moonrepo/build-wasm-plugin@v0
+        with:
+          publish: true
           # OCI repository names must be lowercase; the action defaults to the
           # repo owner verbatim ("Wtiben"), which ghcr.io rejects.
           namespace: wtiben
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
         uses: ncipollo/release-action@v1
         with:
           artifacts: builds/*
           artifactErrorsFailBuild: true
-          body: ${{ steps.build.outputs.changelog-entry }}
+          body: ${{ steps.publish.outputs.changelog-entry }}
+          immutableCreate: true
           makeLatest: true
-          prerelease: ${{ steps.build.outputs.prerelease == 'true' }}
+          prerelease: ${{ steps.publish.outputs.prerelease == 'true' }}
           skipIfReleaseExists: true
