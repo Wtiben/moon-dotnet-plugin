@@ -54,7 +54,7 @@ For local development a `file://` locator also works:
 `moon.yml` (per project):
 
 ```yaml
-language: 'csharp'   # moon 2.3.3 rejects 'c#'
+language: 'csharp'   # moon rejects 'c#' (verified through 2.4.5)
 
 toolchains:
   default: 'dotnet'
@@ -182,15 +182,17 @@ Guarantees:
   would resolve to the MSVC host toolchain, so a rustup directory override keeps
   local builds on GNU: `rustup override set stable-x86_64-pc-windows-gnu --path .`
 
-### moon workspace facts (verified against moon 2.3.3)
+### moon workspace facts (verified against moon 2.3.3 and 2.4.5)
 
 - `moon toolchain info dotnet` requires the plugin locator as an explicit second
   argument (it does not read custom entries from `.moon/toolchains.yml`):
   `moon toolchain info dotnet "file://../moon-dotnet-plugin/target/wasm32-wasip1/debug/dotnet_toolchain.wasm"`.
   The locator is resolved relative to the current working directory.
-- In `moon.yml`, `language: 'c#'` is rejected by moon 2.3.3 ("Invalid fallback
-  variant"); use `language: 'csharp'`. The project-level toolchain key is
+- In `moon.yml`, `language: 'c#'` is rejected ("Invalid fallback variant");
+  use `language: 'csharp'`. The project-level toolchain key is
   `toolchains` (plural): `toolchains: { default: 'dotnet' }`.
+- moon 2.4.x introduced no toolchain WASM API changes (2.4.0 added built-in
+  Poetry/Ruby toolchains only); the plugin runs unmodified on 2.0–2.4.
 
 ### Test harness facts (verified against vendored sources)
 

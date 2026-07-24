@@ -11,7 +11,7 @@ pub fn register_toolchain(
     Ok(Json(RegisterToolchainOutput {
         name: ".NET".into(),
         description: Some(
-            "Provides .NET SDK project-graph extraction, dependency install (dotnet restore), and Docker support for SDK-style C# projects.".into(),
+            "Provides .NET SDK project-graph extraction, dependency install (dotnet restore), and Docker support for SDK-style C#/F#/VB projects.".into(),
         ),
         plugin_version: env!("CARGO_PKG_VERSION").into(),
         language: Some(LanguageType::CSharp),
