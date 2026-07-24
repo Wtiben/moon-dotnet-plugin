@@ -81,7 +81,7 @@ jobs:
           printf 'projects: []\n' > smoke/.moon/workspace.yml
           cd smoke
           git init -q .
-          npx --yes @moonrepo/cli@${MOON_SMOKE_VERSION} toolchain info dotnet \
+          npx --yes --package "@moonrepo/cli@${MOON_SMOKE_VERSION}" moon toolchain info dotnet \
             "file://../builds/dotnet_toolchain.wasm" | tee info.txt
           grep -F '.NET' info.txt
           grep -F 'inferDependencies' info.txt
