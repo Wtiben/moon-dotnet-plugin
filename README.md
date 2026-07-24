@@ -42,7 +42,7 @@ is the source of project discovery).
 
 ```yaml
 dotnet:
-  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.1.0'
+  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.2.0'
   inferDependencies: true   # default
   inferTasks: false         # default; experimental
   restoreArgs: []           # extra args for `dotnet restore`
