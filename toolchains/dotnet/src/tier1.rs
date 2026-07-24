@@ -21,8 +21,15 @@ pub fn register_toolchain(
             "*.{sln,slnx}".into(),
             "global.json".into(),
             "Directory.Build.props".into(),
+            "Directory.Build.targets".into(),
+            "Directory.Build.rsp".into(),
             "Directory.Packages.props".into(),
-            "nuget.config".into(),
+            // NuGet accepts any casing; cover the ones seen in the wild so
+            // case-sensitive filesystems still match.
+            "{nuget,NuGet}.{config,Config}".into(),
+            // `packages.<project>.lock.json` via NuGetLockFilePath; the
+            // default name lives in lock_file_names (exact match only there).
+            "packages.*.lock.json".into(),
         ],
         // Project files (*.csproj) have variable names, which exact-name
         // manifest matching cannot express; detection is covered by
@@ -46,7 +53,7 @@ pub fn initialize_toolchain(
     Json(_): Json<InitializeToolchainInput>,
 ) -> FnResult<Json<InitializeToolchainOutput>> {
     Ok(Json(InitializeToolchainOutput {
-        docs_url: Some("https://github.com/moon-dotnet-plugin/moon-dotnet-plugin#readme".into()),
+        docs_url: Some("https://github.com/Wtiben/moon-dotnet-plugin#readme".into()),
         ..Default::default()
     }))
 }
@@ -61,8 +68,11 @@ pub fn define_docker_metadata(
             "**/*.{csproj,fsproj,vbproj}".into(),
             "**/*.{sln,slnx}".into(),
             "**/*.props".into(),
-            "**/nuget.config".into(),
+            "**/*.targets".into(),
+            "**/Directory.Build.rsp".into(),
+            "**/{nuget,NuGet}.{config,Config}".into(),
             "**/packages.lock.json".into(),
+            "**/packages.*.lock.json".into(),
             "global.json".into(),
             // bin/obj contain generated *.props (obj/*.nuget.g.props) and
             // must never end up in the restore layer.

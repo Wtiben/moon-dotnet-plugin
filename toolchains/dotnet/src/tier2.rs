@@ -7,7 +7,7 @@ use moon_config::{
 };
 use moon_pdk::{
     HostLogInput, HostLogTarget, command_exists, get_host_env_var, get_host_environment,
-    host_log, is_project_toolchain_enabled, locate_root, parse_toolchain_config, plugin_err,
+    host_log, is_project_toolchain_enabled, parse_toolchain_config, plugin_err,
 };
 use moon_pdk_api::*;
 use starbase_utils::fs;
@@ -52,7 +52,68 @@ fn find_project_files(dir: &VirtualPath) -> Vec<VirtualPath> {
 /// Directories that never contain a `packages.lock.json` worth finding.
 const SKIP_DIRS: &[&str] = &["bin", "obj", "node_modules", ".git", ".moon"];
 
-/// Depth-limited search for any `packages.lock.json` under a directory.
+/// NuGet lock file names: the default `packages.lock.json`, plus the
+/// `packages.<project>.lock.json` convention used when `NuGetLockFilePath`
+/// renames it (case-insensitive, NuGet accepts any casing).
+fn is_lock_file_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+
+    lower == "packages.lock.json"
+        || (lower.starts_with("packages.") && lower.ends_with(".lock.json"))
+}
+
+/// List NuGet lock files directly inside a directory (non-recursive), sorted.
+fn find_lock_files(dir: &VirtualPath) -> Vec<VirtualPath> {
+    let mut names = vec![];
+
+    if let Ok(entries) = std::fs::read_dir(dir.any_path()) {
+        names = entries
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| is_lock_file_name(name))
+            .collect::<Vec<_>>();
+
+        names.sort();
+    }
+
+    names.into_iter().map(|name| dir.join(name)).collect()
+}
+
+/// Workspace-level MSBuild/NuGet config files that can change evaluation,
+/// restore, or build behavior from any level between a project dir and the
+/// workspace root. Matched case-insensitively: NuGet itself accepts any
+/// casing of `nuget.config`, and over-matching the others merely over-hashes
+/// (a spurious cache invalidation, never a stale hit).
+const CONFIG_FILE_NAMES: &[&str] = &[
+    "directory.build.props",
+    "directory.build.rsp",
+    "directory.build.targets",
+    "directory.packages.props",
+    "global.json",
+    "nuget.config",
+];
+
+/// List hash-relevant config files directly inside a directory
+/// (non-recursive), sorted by actual file name.
+fn find_config_files(dir: &VirtualPath) -> Vec<VirtualPath> {
+    let mut names = vec![];
+
+    if let Ok(entries) = std::fs::read_dir(dir.any_path()) {
+        names = entries
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| CONFIG_FILE_NAMES.contains(&name.to_ascii_lowercase().as_str()))
+            .collect::<Vec<_>>();
+
+        names.sort();
+    }
+
+    names.into_iter().map(|name| dir.join(name)).collect()
+}
+
+/// Depth-limited search for any NuGet lock file under a directory.
 /// Lock files live next to each project file, not at the dependencies root,
 /// so a root-only check would miss them.
 fn contains_lockfile(dir: &VirtualPath, depth: u8) -> bool {
@@ -70,7 +131,7 @@ fn contains_lockfile(dir: &VirtualPath, depth: u8) -> bool {
         let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
 
         if !is_dir {
-            if name == "packages.lock.json" {
+            if is_lock_file_name(&name) {
                 return true;
             }
         } else if depth > 0 && !SKIP_DIRS.iter().any(|skip| skip.eq_ignore_ascii_case(&name)) {
@@ -177,17 +238,15 @@ pub fn locate_dependencies_root(
     }
 
     // Fall back to the nearest lockfile, then the nearest project file.
-    if output.root.is_none() {
-        if let Some(root) = locate_root(&input.starting_dir, "packages.lock.json") {
-            output.root = root.virtual_path();
+    for probe in [find_lock_files, find_project_files] {
+        if output.root.is_some() {
+            break;
         }
-    }
 
-    if output.root.is_none() {
         let mut current = Some(input.starting_dir.clone());
 
         while let Some(dir) = current {
-            if !find_project_files(&dir).is_empty() {
+            if !probe(&dir).is_empty() {
                 output.root = dir.virtual_path();
                 break;
             }
@@ -504,22 +563,61 @@ pub fn hash_task_contents(
     }
 
     let project_root = input.context.get_project_root(&input.project);
-    let lockfile = project_root.join("packages.lock.json");
 
-    // Lock file present: its content already pins the entire resolved
-    // package set (incl. contentHashes) — include it raw.
-    if lockfile.exists() {
+    // Config files (Directory.Build.props/targets/rsp, Directory.Packages.props,
+    // nuget.config, global.json) from the project dir up to the workspace root
+    // are always hashed: conditions/imports can make any of them affect the
+    // resolved package set, and props/targets/rsp change build behavior even
+    // when the package set is fully pinned by a lock file. Effects of custom
+    // `<Import>`s outside these conventions are only captured via the
+    // evaluated package set below, not content-hashed.
+    let mut configs: BTreeMap<String, String> = BTreeMap::new();
+    let workspace_root = &input.context.workspace_root;
+    let mut current = Some(project_root.clone());
+
+    while let Some(dir) = current {
+        for file in find_config_files(&dir) {
+            let key = file
+                .virtual_path()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|| file.to_string());
+
+            configs.insert(key, fs::read_file(&file)?);
+        }
+
+        if dir.any_path() == workspace_root.any_path() {
+            break;
+        }
+
+        current = dir.parent();
+    }
+
+    // Lock file(s) present: their content already pins the entire resolved
+    // package set (incl. contentHashes) — include them raw and skip the
+    // costly MSBuild evaluation.
+    let lock_files = find_lock_files(&project_root);
+
+    if !lock_files.is_empty() {
+        let mut lockfiles: BTreeMap<String, String> = BTreeMap::new();
+
+        for file in &lock_files {
+            let key = file
+                .virtual_path()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_else(|| file.to_string());
+
+            lockfiles.insert(key, fs::read_file(file)?);
+        }
+
         output.contents.push(json::json!({
-            "lockfile": fs::read_file(&lockfile)?,
+            "configs": configs,
+            "lockfiles": lockfiles,
         }));
 
         return Ok(Json(output));
     }
 
-    // No lock file: hash the *evaluated* PackageReference set plus the
-    // contents of every Directory.Build.props / Directory.Packages.props
-    // from the project dir up to the workspace root (conditions/imports can
-    // make any of them affect the resolved set).
+    // No lock file: hash the *evaluated* PackageReference set instead.
     //
     // Cache the evaluated package set per project within this plugin
     // instance — hash_task_contents runs once per task and MSBuild
@@ -561,34 +659,9 @@ pub fn hash_task_contents(
         packages
     };
 
-    let mut props: BTreeMap<String, String> = BTreeMap::new();
-    let workspace_root = &input.context.workspace_root;
-    let mut current = Some(project_root.clone());
-
-    while let Some(dir) = current {
-        for name in ["Directory.Build.props", "Directory.Packages.props"] {
-            let file = dir.join(name);
-
-            if file.exists() {
-                let key = file
-                    .virtual_path()
-                    .map(|path| path.to_string_lossy().to_string())
-                    .unwrap_or_else(|| name.to_string());
-
-                props.insert(key, fs::read_file(&file)?);
-            }
-        }
-
-        if dir.any_path() == workspace_root.any_path() {
-            break;
-        }
-
-        current = dir.parent();
-    }
-
     output.contents.push(json::json!({
+        "configs": configs,
         "packages": packages,
-        "props": props,
     }));
 
     Ok(Json(output))
