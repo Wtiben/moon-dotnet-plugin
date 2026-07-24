@@ -28,6 +28,9 @@ jobs:
         uses: moonrepo/build-wasm-plugin@v0
         with:
           publish: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+          # OCI repository names must be lowercase; the action defaults to the
+          # repo owner verbatim ("Wtiben"), which ghcr.io rejects.
+          namespace: wtiben
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
