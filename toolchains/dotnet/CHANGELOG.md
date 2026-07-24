@@ -1,9 +1,13 @@
 # Changelog
 
-## Unreleased (0.2.0)
+## 0.2.0
 
 #### 🚀 Features
 
+- **Tier 3**: `setup_toolchain` installs the .NET SDK when `version:` is configured in
+  `.moon/toolchains.yml`, via the official dotnet-install scripts into `~/.dotnet` (or
+  `dotnetRoot`). `X.Y` installs a channel, exact versions install pinned (and skip when
+  already present), `lts`/`sts`/`preview` map to named channels.
 - Project-graph MSBuild evaluation is now batched: a single traversal invocation evaluates
   every project in parallel (in-process worker nodes, target injected via
   `CustomAfterMicrosoftCommon(CrossTargeting)Targets`) instead of spawning one `dotnet msbuild`
