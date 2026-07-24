@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # For setup-rust
+  NEXTEST_TEST_THREADS: 3
+  NEXTEST_RETRIES: 2
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      # The sandbox tests spawn a real `dotnet` process for MSBuild evaluation;
+      # -getProperty/-getItem JSON output requires SDK 8+.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - uses: moonrepo/setup-rust@v1
+        with:
+          bins: cargo-nextest
+          targets: wasm32-wasip1
+      - run: cargo build --target wasm32-wasip1
+      - run: cargo nextest run --workspace --no-default-features

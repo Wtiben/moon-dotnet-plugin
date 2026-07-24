@@ -22,12 +22,16 @@ Dependency extraction shells out to MSBuild instead of statically parsing XML, s
 
 ```yaml
 dotnet:
-  plugin: 'file://../path/to/dotnet_toolchain.wasm'  # relative from the .moon dir
+  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.1.0'
   inferDependencies: true   # default
   inferTasks: false         # default; experimental
   restoreArgs: []           # extra args for `dotnet restore`
   # dotnetRoot: 'C:/Users/me/.dotnet'
 ```
+
+moon downloads the wasm from the GitHub release and caches it — nothing to install.
+For local development a `file://` locator also works:
+`plugin: 'file://../path/to/dotnet_toolchain.wasm'` (relative from the `.moon` dir).
 
 `moon.yml` (per project):
 

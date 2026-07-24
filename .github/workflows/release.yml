@@ -1,0 +1,41 @@
+name: Release
+
+permissions:
+  # Releases
+  contents: write
+  # Packages (ghcr.io OCI artifact)
+  packages: write
+  attestations: write
+  id-token: write
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+*'
+  pull_request:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: moonrepo/setup-rust@v1
+        with:
+          cache: false
+          targets: wasm32-wasip1
+      - id: build
+        uses: moonrepo/build-wasm-plugin@v0
+        with:
+          publish: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: builds/*
+          artifactErrorsFailBuild: true
+          body: ${{ steps.build.outputs.changelog-entry }}
+          makeLatest: true
+          prerelease: ${{ steps.build.outputs.prerelease == 'true' }}
+          skipIfReleaseExists: true
