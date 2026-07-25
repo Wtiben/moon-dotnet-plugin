@@ -20,6 +20,18 @@
   output/intermediate dirs so task hashes are stable. Inference never overrides your own tasks:
   project `moon.yml` tasks replace inferred ones wholesale, and task ids defined in applicable
   inherited task files (`.moon/tasks*`) are not inferred at all.
+- Projects now gain their evaluated `AssemblyName` as a moon **alias**, so they can be
+  addressed by .NET name (`moon run MyCompany.App:build`) and `moon docker prune` can target
+  packages per toolchain.
+- `parse_manifest` (MSBuild-based, no XML parsing): `PackageReference` items become moon
+  manifest dependencies — versionless ones as workspace-`inherited` (Central Package
+  Management) — and `Directory.Packages.props` `PackageVersion` items resolve what they inherit.
+  `Directory.Packages.props` is registered as the toolchain's manifest file, so CPM version
+  bumps now re-trigger dependency installs.
+- `setup_environment` runs `dotnet tool restore` when a local tool manifest
+  (`.config/dotnet-tools.json`) is found, searching from the dependencies root upward to the
+  workspace root the way the dotnet CLI does. Keyed on the manifest's content, so edits re-run
+  the restore and repeat runs skip it.
 - Project-graph MSBuild evaluation is now batched: a single traversal invocation evaluates
   every project in parallel (in-process worker nodes, target injected via
   `CustomAfterMicrosoftCommon(CrossTargeting)Targets`) instead of spawning one `dotnet msbuild`
@@ -41,6 +53,11 @@
 - Docker scaffold globs now include `**/*.targets`, `Directory.Build.rsp`, cased
   `NuGet.Config` variants, and `packages.*.lock.json`.
 - `.slnx` dependency-root marker behavior is now test-covered.
+- Test coverage for the remaining edge cases: `Directory.Build.props` inheritance chains
+  (`GetPathOfFileAbove`), MSBuild `Condition`s on references and packages, multi-targeted
+  (`TargetFrameworks`) projects pinning the documented outer-build behavior, and an opt-in
+  soak test that generates a 60-project workspace and verifies every inferred edge
+  (`cargo test -- --ignored soak`; 3.6s locally).
 
 #### 🐛 Fixes
 

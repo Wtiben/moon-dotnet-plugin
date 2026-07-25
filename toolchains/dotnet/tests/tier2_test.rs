@@ -134,8 +134,11 @@ mod dotnet_toolchain_tier2 {
             let lib = &output.extended_projects[&Id::raw("lib")];
             assert_eq!(lib.dependencies[0].id, Id::raw("core"));
 
-            // core has no references at all, so it contributes nothing.
-            assert!(!output.extended_projects.contains_key(&Id::raw("core")));
+            // core has no references, but still contributes its
+            // AssemblyName-derived alias.
+            let core = &output.extended_projects[&Id::raw("core")];
+            assert!(core.dependencies.is_empty());
+            assert_eq!(core.alias.as_deref(), Some("Core"));
 
             let tests = &output.extended_projects[&Id::raw("app-tests")];
             assert_eq!(tests.dependencies[0].id, Id::raw("app"));
@@ -230,8 +233,17 @@ mod dotnet_toolchain_tier2 {
             // contributes anything.
             let tests = &output.extended_projects[&Id::raw("app-tests")];
             assert_eq!(task_ids(tests), vec!["test"]);
-            assert!(!output.extended_projects.contains_key(&Id::raw("app")));
-            assert!(!output.extended_projects.contains_key(&Id::raw("core")));
+
+            // The others still appear, but only to contribute their
+            // AssemblyName alias — no tasks, and no deps with inference off.
+            for id in ["app", "core", "lib"] {
+                let project = &output.extended_projects[&Id::raw(id)];
+
+                assert!(project.tasks.is_empty(), "{id} tasks");
+                assert!(project.dependencies.is_empty(), "{id} deps");
+                assert!(project.alias.is_some(), "{id} alias");
+            }
+
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -299,6 +311,44 @@ mod dotnet_toolchain_tier2 {
                     .input_files
                     .contains(&PathBuf::from("/workspace/core/Core.vbproj"))
             );
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn emits_assembly_name_as_alias() {
+            let sandbox = create_moon_sandbox("matrix");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let mut input = ExtendProjectGraphInput::default();
+            input
+                .project_sources
+                .insert(Id::raw("deep"), "nested/deep".into());
+            input.toolchain_config = json!({ "inferDependencies": true });
+
+            let output = plugin.extend_project_graph(input).await;
+
+            // Explicit <AssemblyName> beats the file-name default.
+            let deep = &output.extended_projects[&Id::raw("deep")];
+            assert_eq!(deep.alias.as_deref(), Some("MyCompany.Deep"));
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn condition_gated_project_references_resolve() {
+            let sandbox = create_moon_sandbox("matrix");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let mut input = ExtendProjectGraphInput::default();
+            input
+                .project_sources
+                .insert(Id::raw("deep"), "nested/deep".into());
+            input.project_sources.insert(Id::raw("cond"), "cond".into());
+            input.toolchain_config = json!({ "inferDependencies": true });
+
+            let output = plugin.extend_project_graph(input).await;
+
+            // The ProjectReference is gated on '$(EnableDeepRef)' == '1',
+            // set in the project itself — real evaluation resolves it.
+            let cond = &output.extended_projects[&Id::raw("cond")];
+            assert_eq!(cond.dependencies[0].id, Id::raw("deep"));
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -441,6 +491,198 @@ mod dotnet_toolchain_tier2 {
                     .as_deref()
                     .unwrap()
                     .starts_with("HrC5")
+            );
+        }
+    }
+
+    mod parse_manifest {
+        use super::*;
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn parses_package_references_from_a_project_file() {
+            let sandbox = create_moon_sandbox("projects");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .parse_manifest(ParseManifestInput {
+                    path: VirtualPath::Real(sandbox.path().join("app-tests/App.Tests.csproj")),
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    ..Default::default()
+                })
+                .await;
+
+            assert_eq!(
+                output.dependencies["xunit"]
+                    .get_version()
+                    .unwrap()
+                    .to_string(),
+                "2.8.0"
+            );
+            assert_eq!(
+                output.dependencies["Microsoft.NET.Test.Sdk"]
+                    .get_version()
+                    .unwrap()
+                    .to_string(),
+                "17.10.0"
+            );
+            // Test projects set IsPackable=false via the test SDK props, but
+            // those only apply after a restore; unrestored evaluation leaves
+            // it empty, which we report as not publishable.
+            assert!(!output.publishable);
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn versionless_references_are_inherited() {
+            let sandbox = create_moon_sandbox("cpm");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .parse_manifest(ParseManifestInput {
+                    path: VirtualPath::Real(sandbox.path().join("proj/Cpm.csproj")),
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    ..Default::default()
+                })
+                .await;
+
+            // Central Package Management: the version lives in
+            // Directory.Packages.props, so moon resolves it from the
+            // workspace manifest.
+            let dep = &output.dependencies["Newtonsoft.Json"];
+            assert!(dep.is_inherited());
+            assert!(dep.get_version().is_none());
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn parses_package_versions_from_directory_packages_props() {
+            let sandbox = create_moon_sandbox("cpm");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .parse_manifest(ParseManifestInput {
+                    path: VirtualPath::Real(sandbox.path().join("Directory.Packages.props")),
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    ..Default::default()
+                })
+                .await;
+
+            // The workspace manifest resolves what versionless project
+            // references inherit.
+            assert_eq!(
+                output.dependencies["Newtonsoft.Json"]
+                    .get_version()
+                    .unwrap()
+                    .to_string(),
+                "13.0.3"
+            );
+            assert!(!output.publishable);
+        }
+    }
+
+    mod setup_environment {
+        use super::*;
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn no_commands_without_a_tool_manifest() {
+            let sandbox = create_moon_sandbox("projects");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .setup_environment(SetupEnvironmentInput {
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            assert!(output.commands.is_empty());
+            assert!(output.changed_files.is_empty());
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn restores_local_tools_when_manifest_exists() {
+            let sandbox = create_moon_sandbox("projects");
+            sandbox.create_file(
+                ".config/dotnet-tools.json",
+                r#"{"version": 1, "isRoot": true, "tools": {}}"#,
+            );
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .setup_environment(SetupEnvironmentInput {
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            assert_eq!(output.commands.len(), 1);
+
+            let command = &output.commands[0];
+            assert_eq!(command.command.command, "dotnet");
+            assert_eq!(
+                command.command.args,
+                vec!["tool".to_string(), "restore".to_string()]
+            );
+            // The cache key embeds a digest of the manifest content, so a
+            // manifest edit changes the declaration moon fingerprints this
+            // action on (otherwise the restore would never re-run).
+            let cache_key = command.cache.as_deref().unwrap();
+            assert!(cache_key.starts_with("dotnet-tool-restore-"));
+            assert_eq!(command.inputs.len(), 1);
+
+            // Same content -> same key; different content -> different key.
+            let repeat = plugin
+                .setup_environment(SetupEnvironmentInput {
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            assert_eq!(repeat.commands[0].cache.as_deref(), Some(cache_key));
+
+            sandbox.create_file(
+                ".config/dotnet-tools.json",
+                r#"{"version": 1, "isRoot": true, "tools": {"dotnetsay": {"version": "2.1.7", "commands": ["dotnetsay"]}}}"#,
+            );
+
+            let edited = plugin
+                .setup_environment(SetupEnvironmentInput {
+                    root: VirtualPath::Real(sandbox.path().into()),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            assert_ne!(edited.commands[0].cache.as_deref(), Some(cache_key));
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn finds_tool_manifest_above_the_dependencies_root() {
+            let sandbox = create_moon_sandbox("projects");
+            // Tool manifests conventionally live at the repository root, but
+            // any project directory with a lock file is its own dependencies
+            // root — so the lookup walks upward like the dotnet CLI does.
+            sandbox.create_file(
+                ".config/dotnet-tools.json",
+                r#"{"version": 1, "isRoot": true, "tools": {}}"#,
+            );
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .setup_environment(SetupEnvironmentInput {
+                    root: VirtualPath::Real(sandbox.path().join("app")),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            assert_eq!(output.commands.len(), 1);
+            assert_eq!(
+                output.commands[0].command.args,
+                vec!["tool".to_string(), "restore".to_string()]
             );
         }
     }
@@ -605,6 +847,78 @@ mod dotnet_toolchain_tier2 {
                     .unwrap()
                     .contains("LangVersion")
             );
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn props_inheritance_chain_hashes_every_level() {
+            let sandbox = create_moon_sandbox("matrix");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .hash_task_contents(HashTaskContentsInput {
+                    project: fragment("deep", "nested/deep"),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            let contents = &output.contents[0];
+            let configs = contents["configs"].as_object().unwrap();
+
+            // Every props file from the project dir up to the workspace root
+            // is content-hashed, not just the nearest one.
+            assert!(configs.contains_key("/workspace/nested/Directory.Build.props"));
+            assert!(configs.contains_key("/workspace/Directory.Build.props"));
+
+            // The nested props chains to the root props via
+            // GetPathOfFileAbove, so packages from both levels evaluate in.
+            let packages = contents["packages"].as_object().unwrap();
+            assert_eq!(packages["NestedPkg"].as_str().unwrap(), "2.0.0");
+            assert_eq!(packages["RootPkg"].as_str().unwrap(), "1.0.0");
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn multi_targeted_project_hashes_the_outer_build() {
+            let sandbox = create_moon_sandbox("matrix");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .hash_task_contents(HashTaskContentsInput {
+                    project: fragment("multi", "multi"),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            let packages = output.contents[0]["packages"].as_object().unwrap();
+
+            // Documented scope cut: evaluation is the outer (cross-targeting)
+            // build, where TargetFramework is empty — so per-TFM conditional
+            // packages are invisible. The root props package still resolves,
+            // proving the project itself evaluated.
+            assert!(packages.contains_key("RootPkg"));
+            assert!(!packages.contains_key("Net8OnlyPkg"));
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn condition_gated_packages_resolve_by_evaluation() {
+            let sandbox = create_moon_sandbox("matrix");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .hash_task_contents(HashTaskContentsInput {
+                    project: fragment("cond", "cond"),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            let packages = output.contents[0]["packages"].as_object().unwrap();
+
+            // Conditions are resolved by MSBuild, so a true condition
+            // contributes and a false one does not.
+            assert_eq!(packages["ExtraPkg"].as_str().unwrap(), "3.0.0");
+            assert!(!packages.contains_key("NeverPkg"));
         }
 
         #[tokio::test(flavor = "multi_thread")]

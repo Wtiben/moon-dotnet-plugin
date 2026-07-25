@@ -1,0 +1,4 @@
+projects:
+  - 'nested/deep'
+  - 'multi'
+  - 'cond'

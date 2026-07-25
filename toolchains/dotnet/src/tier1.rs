@@ -31,10 +31,12 @@ pub fn register_toolchain(
             // default name lives in lock_file_names (exact match only there).
             "packages.*.lock.json".into(),
         ],
-        // Project files (*.csproj) have variable names, which exact-name
-        // manifest matching cannot express; detection is covered by
-        // config_file_globs instead.
-        manifest_file_names: vec![],
+        // Project files (*.csproj) have variable names, which moon's
+        // literal-name manifest matching cannot express; their detection is
+        // covered by config_file_globs instead. Directory.Packages.props is
+        // the one fixed-name .NET manifest: registering it makes CPM version
+        // bumps re-trigger dependency installs via parse_manifest.
+        manifest_file_names: vec!["Directory.Packages.props".into()],
         lock_file_names: vec!["packages.lock.json".into()],
         // NuGet uses a global package cache, not an in-repo vendor dir.
         vendor_dir_name: None,

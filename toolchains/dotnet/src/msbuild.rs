@@ -34,8 +34,22 @@ impl MsbuildEvaluation {
 
     /// PackageReference `Identity` -> `Version` (missing version becomes `*`).
     pub fn package_references(&self) -> BTreeMap<String, String> {
+        self.identity_version_items("PackageReference", "*")
+    }
+
+    /// PackageVersion `Identity` -> `Version` (Central Package Management
+    /// declarations from `Directory.Packages.props`; empty without CPM).
+    pub fn package_versions(&self) -> BTreeMap<String, String> {
+        self.identity_version_items("PackageVersion", "")
+    }
+
+    fn identity_version_items(
+        &self,
+        item_type: &str,
+        missing_version: &str,
+    ) -> BTreeMap<String, String> {
         self.items
-            .get("PackageReference")
+            .get(item_type)
             .map(|items| {
                 items
                     .iter()
@@ -45,7 +59,7 @@ impl MsbuildEvaluation {
                             .get("Version")
                             .and_then(|value| value.as_str())
                             .filter(|value| !value.is_empty())
-                            .unwrap_or("*");
+                            .unwrap_or(missing_version);
 
                         Some((identity.to_owned(), version.to_owned()))
                     })
@@ -58,11 +72,14 @@ impl MsbuildEvaluation {
 /// The exact `-getProperty` list requested per evaluation.
 /// `BaseOutputPath`/`BaseIntermediateOutputPath`/`PublishDir` feed inferred
 /// task outputs and input exclusions (they follow redirected output
-/// locations, e.g. .NET 8 `UseArtifactsOutput`).
-pub const EVAL_PROPERTIES: &str = "TargetFramework,TargetFrameworks,OutputType,IsTestProject,IsPackable,RestorePackagesWithLockFile,BaseOutputPath,BaseIntermediateOutputPath,PublishDir,Configuration";
+/// locations, e.g. .NET 8 `UseArtifactsOutput`). `AssemblyName`/`Version`
+/// feed the project alias and manifest metadata.
+pub const EVAL_PROPERTIES: &str = "TargetFramework,TargetFrameworks,OutputType,IsTestProject,IsPackable,RestorePackagesWithLockFile,BaseOutputPath,BaseIntermediateOutputPath,PublishDir,Configuration,AssemblyName,Version";
 
-/// The exact `-getItem` list requested per evaluation.
-pub const EVAL_ITEMS: &str = "ProjectReference,PackageReference";
+/// The exact `-getItem` list requested per evaluation. `PackageVersion`
+/// items exist under Central Package Management (declared in
+/// `Directory.Packages.props`) and are empty otherwise.
+pub const EVAL_ITEMS: &str = "ProjectReference,PackageReference,PackageVersion";
 
 /// Parse the stdout of an MSBuild `-get*` invocation. MSBuild may print stray
 /// warnings before the JSON — start at the first `{`.
@@ -425,6 +442,9 @@ mod tests {
     "PackageReference": [
       { "Identity": "Newtonsoft.Json", "Version": "13.0.3" },
       { "Identity": "NoVersionPkg" }
+    ],
+    "PackageVersion": [
+      { "Identity": "Newtonsoft.Json", "Version": "13.0.3" }
     ]
   }
 }"#;
@@ -445,6 +465,9 @@ mod tests {
         let packages = eval.package_references();
         assert_eq!(packages.get("Newtonsoft.Json").unwrap(), "13.0.3");
         assert_eq!(packages.get("NoVersionPkg").unwrap(), "*");
+
+        let versions = eval.package_versions();
+        assert_eq!(versions.get("Newtonsoft.Json").unwrap(), "13.0.3");
     }
 
     #[test]

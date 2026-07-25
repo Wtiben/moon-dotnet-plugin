@@ -22,7 +22,10 @@ mod dotnet_toolchain_tier1 {
             assert_eq!(output.name, ".NET");
             assert_eq!(output.exe_names, vec!["dotnet".to_string()]);
             assert_eq!(output.lock_file_names, vec!["packages.lock.json".to_string()]);
-            assert!(output.manifest_file_names.is_empty());
+            assert_eq!(
+                output.manifest_file_names,
+                vec!["Directory.Packages.props".to_string()]
+            );
             assert!(output.vendor_dir_name.is_none());
             assert!(
                 output

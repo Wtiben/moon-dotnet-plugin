@@ -255,6 +255,20 @@ fn load_inherited_task_ids(workspace_root: &VirtualPath) -> BTreeSet<String> {
     ids
 }
 
+/// FNV-1a digest, rendered hex. Used only to discriminate cache keys, never
+/// for integrity — a plain content hash would mean pulling sha2 into the
+/// wasm binary. Deterministic across Rust versions, unlike `DefaultHasher`.
+fn content_digest(content: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+
+    for byte in content.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+
+    format!("{hash:016x}")
+}
+
 /// Resolve the DOTNET_ROOT to inject into task environments.
 /// Order: explicit config > existing host env var > `~/.dotnet` when it
 /// contains an actual SDK layout (the proto dotnet plugin installs there).
@@ -508,6 +522,20 @@ pub fn extend_project_graph(
                 }
             };
 
+            // Project alias from the evaluated AssemblyName, so tasks can
+            // reference the project by its .NET name (e.g.
+            // `moon run MyCompany.App:build`). moon silently skips aliases
+            // that collide with project ids or already-claimed aliases, and
+            // an alias equal to its own id is a no-op — no need to filter
+            // beyond emptiness here.
+            if project_output.alias.is_none() {
+                let assembly_name = evaluation.property("AssemblyName");
+
+                if !assembly_name.is_empty() {
+                    project_output.alias = Some(assembly_name.to_owned());
+                }
+            }
+
             if config.infer_dependencies {
                 for reference in evaluation.project_reference_paths() {
                     let key = normalize_path_key(&reference);
@@ -595,7 +623,10 @@ pub fn extend_project_graph(
             }
         }
 
-        if !project_output.dependencies.is_empty() || !project_output.tasks.is_empty() {
+        if !project_output.dependencies.is_empty()
+            || !project_output.tasks.is_empty()
+            || project_output.alias.is_some()
+        {
             output.extended_projects.insert(id.to_owned(), project_output);
         }
     }
@@ -669,6 +700,142 @@ pub fn parse_lock(Json(input): Json<ParseLockInput>) -> FnResult<Json<ParseLockO
                 });
             }
         }
+    }
+
+    Ok(Json(output))
+}
+
+#[plugin_fn]
+pub fn parse_manifest(
+    Json(input): Json<ParseManifestInput>,
+) -> FnResult<Json<ParseManifestOutput>> {
+    let mut output = ParseManifestOutput::default();
+
+    let Some(real_path) = input.path.real_path() else {
+        return Ok(Json(output));
+    };
+
+    let env = get_host_environment()?;
+
+    // Degrade silently like hash_task_contents: a missing dotnet must not
+    // fail moon's install fingerprinting.
+    if !command_exists(&env, "dotnet") {
+        return Ok(Json(output));
+    }
+
+    let evaluation = match evaluate_project(&real_path) {
+        Ok(evaluation) => evaluation,
+        Err(error) => {
+            host_log!(
+                warn,
+                "MSBuild evaluation failed while parsing manifest {}: {}",
+                real_path.display(),
+                error
+            );
+
+            return Ok(Json(output));
+        }
+    };
+
+    // NuGet range syntax ("[13.0.3]", "(1.0,2.0)") is not a moon version
+    // spec; keep the raw string as a reference so the dependency is still
+    // listed (it just won't contribute a version to fingerprints).
+    let to_dependency = |version: String| match UnresolvedVersionSpec::parse(&version) {
+        Ok(spec) => ManifestDependency::new(spec),
+        Err(_) => ManifestDependency::Config(ManifestDependencyConfig {
+            reference: Some(version),
+            ..Default::default()
+        }),
+    };
+
+    let is_packages_props = input
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("Directory.Packages.props"));
+
+    if is_packages_props {
+        // Central Package Management: PackageVersion items declare the
+        // workspace-level versions that versionless PackageReferences
+        // inherit. This is the only manifest name moon can actually track
+        // for .NET — project files have variable names, which moon's
+        // literal-name manifest matching cannot express.
+        for (name, version) in evaluation.package_versions() {
+            output.dependencies.insert(name, to_dependency(version));
+        }
+    } else {
+        for (name, version) in evaluation.package_references() {
+            let dep = if version == "*" {
+                // Versionless under CPM: inherited from the workspace
+                // manifest (Directory.Packages.props).
+                ManifestDependency::inherited()
+            } else {
+                to_dependency(version)
+            };
+
+            output.dependencies.insert(name, dep);
+        }
+
+        output.publishable = evaluation
+            .property("IsPackable")
+            .eq_ignore_ascii_case("true");
+    }
+
+    Ok(Json(output))
+}
+
+#[plugin_fn]
+pub fn setup_environment(
+    Json(input): Json<SetupEnvironmentInput>,
+) -> FnResult<Json<SetupEnvironmentOutput>> {
+    let mut output = SetupEnvironmentOutput::default();
+
+    // Restore local dotnet tools once per dependencies root when a tool
+    // manifest exists. Local tools (.config/dotnet-tools.json) are distinct
+    // from global tools, which remain out of scope.
+    //
+    // Search from the dependencies root up to the workspace root, the same
+    // way the dotnet CLI resolves a tool manifest: it conventionally lives at
+    // the repository root, which is not necessarily a dependencies root (any
+    // project directory holding a lock file becomes one).
+    let mut tool_manifest = None;
+    let workspace_root = &input.context.workspace_root;
+    let mut current = Some(input.root.clone());
+
+    while let Some(dir) = current {
+        let candidate = dir.join(".config").join("dotnet-tools.json");
+
+        if candidate.exists() {
+            tool_manifest = Some(candidate);
+            break;
+        }
+
+        if dir.any_path() == workspace_root.any_path() {
+            break;
+        }
+
+        current = dir.parent();
+    }
+
+    if let Some(tool_manifest) = tool_manifest {
+        let mut command = ExecCommand::new(
+            ExecCommandInput::new("dotnet", ["tool", "restore"]).cwd(input.root.clone()),
+        );
+
+        command.label = Some("dotnet tool restore".into());
+
+        // The cache key carries a digest of the manifest content, because
+        // moon fingerprints this action on the *declaration* we return here
+        // and skips it wholesale when unchanged — a stable key would mean a
+        // manifest edit never re-runs the restore. `inputs` then prevents
+        // re-execution when the action runs again for unrelated reasons.
+        command.cache = Some(format!(
+            "dotnet-tool-restore-{}",
+            content_digest(&fs::read_file(&tool_manifest)?)
+        ));
+        command.inputs.push(CacheInput::FileHash(tool_manifest));
+
+        output.commands.push(command);
     }
 
     Ok(Json(output))
