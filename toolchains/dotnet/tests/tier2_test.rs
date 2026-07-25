@@ -1126,6 +1126,32 @@ mod dotnet_toolchain_tier2 {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        async fn does_not_cache_a_package_set_it_could_not_fully_evaluate() {
+            let sandbox = create_moon_sandbox("unevaluatable");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let mut graph_input = ExtendProjectGraphInput::default();
+            graph_input
+                .project_sources
+                .insert(Id::raw("proj"), "proj".into());
+            graph_input.toolchain_config = json!({ "inferTasks": false });
+
+            plugin.extend_project_graph(graph_input).await;
+
+            // An unloadable project yields no package set. Persisting the empty
+            // one would validate forever under its digest, and since that set
+            // is the only hash signal without a lock file, package changes
+            // would stop invalidating task hashes entirely.
+            assert!(
+                !sandbox
+                    .path()
+                    .join(".moon/cache/dotnet-toolchain/eval/proj.json")
+                    .exists(),
+                "an incomplete package set must not reach the on-disk cache"
+            );
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         async fn skips_projects_without_dotnet_toolchain() {
             let sandbox = create_moon_sandbox("projects");
             let plugin = sandbox.create_toolchain("dotnet").await;

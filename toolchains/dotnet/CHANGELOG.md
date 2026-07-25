@@ -26,6 +26,13 @@
 
 #### 🐛 Fixes
 
+- The evaluated package-set cache is no longer written when evaluation was incomplete. A missing
+  `dotnet`, an unloadable project, or a project file without a host path previously persisted a
+  **partial or empty** set under a digest that then validated forever. Since that set is the only
+  hash signal for a workspace without `packages.lock.json`, a package bump stopped invalidating task
+  hashes and moon served stale builds — and installing the SDK afterwards did not recover it. The
+  in-process memo is still written either way, so a genuinely absent SDK is not re-probed once per
+  task.
 - The inferred `test` and `publish` tasks now mark their `~:build` dependency **optional**. moon
   defaults `~:` deps to mandatory, so `inferTasks: ['test']` (or `['publish']`) produced a task
   depending on a `build` that was never inferred, and project-graph construction failed outright

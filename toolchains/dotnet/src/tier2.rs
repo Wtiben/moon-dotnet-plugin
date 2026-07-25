@@ -871,8 +871,12 @@ pub fn extend_project_graph(
     for (id, files) in &project_files {
         let mut project_output = ExtendProjectOutput::default();
         let mut seen_deps: BTreeMap<Id, ()> = BTreeMap::new();
-        // Package set collected for the task-hashing cache below.
+        // Package set collected for the task-hashing cache below. Only cached
+        // when every project file was evaluated — a partial set is
+        // indistinguishable from a complete one once written, and it would
+        // then be served under a digest that stays valid.
         let mut packages: BTreeMap<String, String> = BTreeMap::new();
+        let mut evaluated_all = true;
 
         let project_root = input
             .project_sources
@@ -887,6 +891,7 @@ pub fn extend_project_graph(
 
         for file in files {
             let Some(real_path) = file.real_path() else {
+                evaluated_all = false;
                 continue;
             };
 
@@ -914,6 +919,8 @@ pub fn extend_project_graph(
                             real_path.display(),
                             error
                         );
+
+                        evaluated_all = false;
                         continue;
                     }
                 }
@@ -1025,7 +1032,8 @@ pub fn extend_project_graph(
 
         // Hand the evaluated package set to task hashing. Projects with a
         // lock file take the lock-file branch there and never need it.
-        if let Some(project_root) = project_root
+        if evaluated_all
+            && let Some(project_root) = project_root
             && find_lock_files(&project_root).is_empty()
         {
             write_eval_cache(
@@ -1356,14 +1364,18 @@ pub fn hash_task_contents(
         cached
     } else {
         let mut packages = BTreeMap::new();
+        let mut evaluated_all = false;
         let env = get_host_environment()?;
 
         if command_exists(&env, "dotnet") {
             let config = parse_toolchain_config::<DotnetToolchainConfig>(input.toolchain_config)?;
             let eval_env = build_eval_env(&config, project_root.clone(), workspace_root)?;
 
+            evaluated_all = true;
+
             for file in find_project_files(&project_root) {
                 let Some(real_path) = file.real_path() else {
+                    evaluated_all = false;
                     continue;
                 };
 
@@ -1378,20 +1390,32 @@ pub fn hash_task_contents(
                             input.project.id,
                             error
                         );
+
+                        evaluated_all = false;
                     }
                 }
             }
         }
 
+        // Kept regardless: the var is scoped to this plugin instance, so it
+        // stops us re-evaluating once per task while an SDK is genuinely
+        // missing, and it disappears with the process.
         var::set(&cache_key, serde_json::to_string(&packages)?)?;
-        // Prime the on-disk cache too, so sibling tasks and later runs skip
-        // the evaluation even when the project graph was already cached.
-        write_eval_cache(
-            workspace_root,
-            input.project.id.as_str(),
-            &project_root,
-            packages.clone(),
-        );
+
+        // The on-disk cache only ever holds a complete set. Writing a partial
+        // one would persist it under a digest that keeps validating, and since
+        // this set is the only hash signal for a workspace without lock files,
+        // package changes would stop invalidating task hashes — moon would
+        // serve stale builds, and installing the missing SDK later would not
+        // recover it.
+        if evaluated_all {
+            write_eval_cache(
+                workspace_root,
+                input.project.id.as_str(),
+                &project_root,
+                packages.clone(),
+            );
+        }
 
         packages
     };
