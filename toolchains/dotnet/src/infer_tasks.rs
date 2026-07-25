@@ -53,9 +53,7 @@ fn strip_prefix_ci<'a>(value: &'a str, base: &str) -> Option<&'a str> {
             };
         };
 
-        let Some((_, value_ch)) = value_iter.next() else {
-            return None;
-        };
+        let (_, value_ch) = value_iter.next()?;
 
         if value_ch != base_ch && !value_ch.to_lowercase().eq(base_ch.to_lowercase()) {
             return None;

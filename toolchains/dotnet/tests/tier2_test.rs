@@ -1298,7 +1298,7 @@ mod dotnet_toolchain_tier2 {
                 }
                 _ => {
                     assert!(
-                        output.env.get("DOTNET_ROOT").is_none(),
+                        !output.env.contains_key("DOTNET_ROOT"),
                         "an SDK-8-only ~/.dotnet must not be injected for a 10.x pin"
                     );
                     assert!(output.paths.is_empty());
@@ -1365,7 +1365,7 @@ mod dotnet_toolchain_tier2 {
             // The host DOTNET_ROOT env var may leak in from the dev machine;
             // only assert the cache-dir case when it is not set there.
             if std::env::var("DOTNET_ROOT").is_err() {
-                assert!(output.env.get("DOTNET_ROOT").is_none());
+                assert!(!output.env.contains_key("DOTNET_ROOT"));
                 assert!(output.paths.is_empty());
             }
         }

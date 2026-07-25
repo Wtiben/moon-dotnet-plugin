@@ -157,15 +157,15 @@ pub fn setup_toolchain(
     // Fully-qualified versions can skip the network entirely when that SDK
     // is already laid out. Channels/aliases resolve server-side, so the
     // install script decides for those (it skips re-installs itself).
-    if let Some(version) = exact_version(spec) {
-        if into_virtual_path(install_root.join("sdk").join(&version))?.exists() {
-            warn_on_unsatisfied_pins(
-                &input.context.workspace_root,
-                &into_virtual_path(&install_root)?,
-            )?;
+    if let Some(version) = exact_version(spec)
+        && into_virtual_path(install_root.join("sdk").join(&version))?.exists()
+    {
+        warn_on_unsatisfied_pins(
+            &input.context.workspace_root,
+            &into_virtual_path(&install_root)?,
+        )?;
 
-            return Ok(Json(output));
-        }
+        return Ok(Json(output));
     }
 
     // Stage the official install script under moon's cache dir. Fetched

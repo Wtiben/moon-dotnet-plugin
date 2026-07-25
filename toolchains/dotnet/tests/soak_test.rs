@@ -45,8 +45,8 @@ async fn soak_project_graph_at_scale() {
             .collect::<String>();
 
         sandbox.create_file(
-            &format!("{id}/{id}.csproj"),
-            &format!(
+            format!("{id}/{id}.csproj"),
+            format!(
                 r#"<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
@@ -59,12 +59,12 @@ async fn soak_project_graph_at_scale() {
         );
 
         sandbox.create_file(
-            &format!("{id}/Class1.cs"),
-            &format!("namespace {id};\n\npublic class Class1;\n"),
+            format!("{id}/Class1.cs"),
+            format!("namespace {id};\n\npublic class Class1;\n"),
         );
 
         sandbox.create_file(
-            &format!("{id}/moon.yml"),
+            format!("{id}/moon.yml"),
             "language: 'csharp'\n\ntoolchains:\n  default: 'dotnet'\n",
         );
     }
@@ -78,7 +78,7 @@ async fn soak_project_graph_at_scale() {
     for index in 0..PROJECTS {
         input
             .project_sources
-            .insert(Id::raw(project_id(index)), project_id(index).into());
+            .insert(Id::raw(project_id(index)), project_id(index));
     }
 
     input.toolchain_config = json!({ "inferDependencies": true });

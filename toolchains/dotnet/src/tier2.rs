@@ -497,10 +497,10 @@ fn resolve_dotnet_root(
         return Ok(Some(root.clone()));
     }
 
-    if let Some(existing) = get_host_env_var("DOTNET_ROOT")? {
-        if !existing.is_empty() {
-            return Ok(Some(existing));
-        }
+    if let Some(existing) = get_host_env_var("DOTNET_ROOT")?
+        && !existing.is_empty()
+    {
+        return Ok(Some(existing));
     }
 
     let env = get_host_environment()?;

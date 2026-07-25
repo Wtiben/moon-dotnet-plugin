@@ -13,18 +13,40 @@ env:
   NEXTEST_RETRIES: 2
 
 jobs:
+  # The gates the official plugins repo runs on every job, via its root
+  # `format` and `lint` moon tasks. Kept as a separate ubuntu-only job: both
+  # are OS-independent, so paying for them three times buys nothing.
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: moonrepo/setup-rust@v1
+        with:
+          components: clippy, rustfmt
+          targets: wasm32-wasip1
+      - run: cargo fmt --all --check
+      # Both variants: `--no-default-features` is what the tests compile, while
+      # the wasm target is the only one that type-checks the `wasm`-gated tier
+      # functions that actually ship.
+      - run: cargo clippy --workspace --all-targets --no-default-features
+      - run: cargo clippy --target wasm32-wasip1
+
   test:
     name: Test
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
       fail-fast: false
     steps:
       - uses: actions/checkout@v7
       # The sandbox tests spawn a real `dotnet` process for MSBuild evaluation;
-      # -getProperty/-getItem JSON output requires SDK 8+.
+      # -getProperty/-getItem JSON output requires SDK 8+. The official plugins
+      # repo does not provision .NET, so merging upstream needs this step added
+      # to its workflow.
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
@@ -32,5 +54,9 @@ jobs:
         with:
           bins: cargo-nextest
           targets: wasm32-wasip1
-      - run: cargo build --target wasm32-wasip1
+      # Release, not debug: `find_wasm_file` prefers `release/` over `debug/`
+      # and the official repo's `test` task depends on a `--release` build, so
+      # this is the wasm the suite is meant to exercise — and the one
+      # `release.yml` publishes, `lto` and `panic = "abort"` included.
+      - run: cargo build --target wasm32-wasip1 --release
       - run: cargo nextest run --workspace --no-default-features
