@@ -1,4 +1,5 @@
 use crate::config::DotnetToolchainConfig;
+use crate::discovery::SKIP_DIRS;
 use crate::dotnet_install::{
     exact_version, install_script_file_name, install_script_url, install_version_args,
 };
@@ -15,9 +16,6 @@ use starbase_utils::fs;
 extern "ExtismHost" {
     fn host_log(input: Json<HostLogInput>);
 }
-
-/// Directories never worth searching for a `global.json`.
-const SKIP_DIRS: &[&str] = &["bin", "obj", "node_modules", ".git", ".moon"];
 
 /// Collect `global.json` files in the workspace (depth-limited). Unlike task
 /// environments, setup has no project to walk up from — and the pin often
