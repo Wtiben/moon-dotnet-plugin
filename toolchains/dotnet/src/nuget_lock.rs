@@ -80,7 +80,13 @@ mod tests {
         assert_eq!(newtonsoft.dep_type, "Direct");
         assert_eq!(newtonsoft.requested.as_deref(), Some("[13.0.3, )"));
         assert_eq!(newtonsoft.resolved.as_deref(), Some("13.0.3"));
-        assert!(newtonsoft.content_hash.as_deref().unwrap().starts_with("HrC5"));
+        assert!(
+            newtonsoft
+                .content_hash
+                .as_deref()
+                .unwrap()
+                .starts_with("HrC5")
+        );
 
         // Project-type entries carry no resolved version/hash.
         let project = &net8["App"];

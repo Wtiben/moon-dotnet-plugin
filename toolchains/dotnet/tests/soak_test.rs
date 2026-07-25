@@ -40,9 +40,7 @@ async fn soak_project_graph_at_scale() {
             .map(|dep| {
                 let dep_id = project_id(dep);
 
-                format!(
-                    "    <ProjectReference Include=\"..\\{dep_id}\\{dep_id}.csproj\" />\n"
-                )
+                format!("    <ProjectReference Include=\"..\\{dep_id}\\{dep_id}.csproj\" />\n")
             })
             .collect::<String>();
 

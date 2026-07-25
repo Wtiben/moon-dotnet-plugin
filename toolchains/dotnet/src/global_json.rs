@@ -266,10 +266,9 @@ mod tests {
 
     #[test]
     fn latest_major_accepts_any_newer_sdk() {
-        let requirement = parse_sdk_requirement(
-            r#"{"sdk":{"version":"10.0.301","rollForward":"latestMajor"}}"#,
-        )
-        .unwrap();
+        let requirement =
+            parse_sdk_requirement(r#"{"sdk":{"version":"10.0.301","rollForward":"latestMajor"}}"#)
+                .unwrap();
 
         // The exact scenario from a production repository: a leftover
         // ~/.dotnet holding only SDK 8 cannot serve a 10.x pin.
@@ -281,8 +280,7 @@ mod tests {
 
     #[test]
     fn default_roll_forward_stays_within_the_feature_band() {
-        let requirement =
-            parse_sdk_requirement(r#"{"sdk":{"version":"10.0.201"}}"#).unwrap();
+        let requirement = parse_sdk_requirement(r#"{"sdk":{"version":"10.0.201"}}"#).unwrap();
 
         assert_eq!(requirement.roll_forward, RollForward::Patch);
         assert!(satisfies(&versions(&["10.0.201"]), &requirement));

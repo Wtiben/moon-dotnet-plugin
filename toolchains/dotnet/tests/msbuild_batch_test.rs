@@ -22,10 +22,8 @@ fn batched_traversal_evaluates_fixture_projects() {
     .map(|[dir, file]| fixtures.join(dir).join(file).to_string_lossy().to_string())
     .collect::<Vec<_>>();
 
-    let scratch = std::env::temp_dir().join(format!(
-        "moon-dotnet-batch-test-{}",
-        std::process::id()
-    ));
+    let scratch =
+        std::env::temp_dir().join(format!("moon-dotnet-batch-test-{}", std::process::id()));
 
     std::fs::create_dir_all(&scratch).unwrap();
     std::fs::write(scratch.join("moon-eval.targets"), moon_eval_targets_xml()).unwrap();
@@ -119,8 +117,15 @@ fn broken_project_aborts_batch_and_is_detectable() {
     .unwrap();
 
     let projects = vec![
-        fixtures.join("core").join("Core.csproj").to_string_lossy().to_string(),
-        scratch.join("broken/Broken.csproj").to_string_lossy().to_string(),
+        fixtures
+            .join("core")
+            .join("Core.csproj")
+            .to_string_lossy()
+            .to_string(),
+        scratch
+            .join("broken/Broken.csproj")
+            .to_string_lossy()
+            .to_string(),
     ];
 
     std::fs::write(scratch.join("moon-eval.targets"), moon_eval_targets_xml()).unwrap();

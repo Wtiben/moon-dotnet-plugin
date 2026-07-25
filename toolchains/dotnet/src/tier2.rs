@@ -1,7 +1,5 @@
 use crate::config::DotnetToolchainConfig;
-use crate::global_json::{
-    SdkRequirement, parse_sdk_requirement, satisfies, selects_test_platform,
-};
+use crate::global_json::{SdkRequirement, parse_sdk_requirement, satisfies, selects_test_platform};
 use crate::infer_tasks::{InferInputs, infer_tasks, reportable_conflicts};
 use crate::msbuild::{
     EvalEnv, common_source_prefix, evaluate_project, evaluate_projects_batch,
@@ -140,7 +138,11 @@ fn contains_lockfile(dir: &VirtualPath, depth: u8) -> bool {
             if is_lock_file_name(&name) {
                 return true;
             }
-        } else if depth > 0 && !SKIP_DIRS.iter().any(|skip| skip.eq_ignore_ascii_case(&name)) {
+        } else if depth > 0
+            && !SKIP_DIRS
+                .iter()
+                .any(|skip| skip.eq_ignore_ascii_case(&name))
+        {
             subdirs.push(name);
         }
     }
@@ -197,7 +199,10 @@ fn applies_to_dotnet(scope: Option<&InheritedByScope>) -> bool {
     if let Some(toolchains) = &scope.toolchains {
         scoped = true;
 
-        if toolchains.iter().any(|id| id.eq_ignore_ascii_case("dotnet")) {
+        if toolchains
+            .iter()
+            .any(|id| id.eq_ignore_ascii_case("dotnet"))
+        {
             return true;
         }
     }
@@ -516,8 +521,7 @@ fn resolve_dotnet_root(
 
     if let Some(scope) = scope
         && command_exists(&env, "dotnet")
-        && let Some((file, requirement)) =
-            find_sdk_requirement(scope.start, scope.workspace_root)
+        && let Some((file, requirement)) = find_sdk_requirement(scope.start, scope.workspace_root)
     {
         let installed = installed_sdk_versions(&candidate);
 
@@ -712,10 +716,7 @@ pub fn extend_project_graph(
 
         for file in &files {
             if let Some(real) = file.real_path() {
-                real_path_index.insert(
-                    normalize_path_key(&real.to_string_lossy()),
-                    id.to_owned(),
-                );
+                real_path_index.insert(normalize_path_key(&real.to_string_lossy()), id.to_owned());
             }
 
             if let Some(name) = file.file_name().and_then(|name| name.to_str()) {
@@ -798,7 +799,10 @@ pub fn extend_project_graph(
             // and the ways to fix it.
             if is_sdk_resolution_failure(&message) {
                 let pin = find_sdk_requirement(
-                    eval_env.cwd.as_ref().unwrap_or(&input.context.workspace_root),
+                    eval_env
+                        .cwd
+                        .as_ref()
+                        .unwrap_or(&input.context.workspace_root),
                     &input.context.workspace_root,
                 );
 
@@ -868,9 +872,9 @@ pub fn extend_project_graph(
 
         // Which `dotnet test` flavour this project's tasks will run under.
         let test_platform_runner = infer_tasks_enabled
-            && project_root.as_ref().is_some_and(|root| {
-                uses_test_platform_runner(root, &input.context.workspace_root)
-            });
+            && project_root
+                .as_ref()
+                .is_some_and(|root| uses_test_platform_runner(root, &input.context.workspace_root));
 
         for file in files {
             let Some(real_path) = file.real_path() else {
@@ -1027,7 +1031,9 @@ pub fn extend_project_graph(
             || !project_output.tasks.is_empty()
             || project_output.alias.is_some()
         {
-            output.extended_projects.insert(id.to_owned(), project_output);
+            output
+                .extended_projects
+                .insert(id.to_owned(), project_output);
         }
     }
 
@@ -1331,9 +1337,7 @@ pub fn hash_task_contents(
     //   3. evaluating this project alone.
     let cache_key = format!("eval-packages:{}", input.project.id);
 
-    let packages: BTreeMap<String, String> = if let Some(cached) =
-        var::get::<String>(&cache_key)?
-    {
+    let packages: BTreeMap<String, String> = if let Some(cached) = var::get::<String>(&cache_key)? {
         serde_json::from_str(&cached)?
     } else if let Some(cached) =
         read_eval_cache(workspace_root, input.project.id.as_str(), &project_root)

@@ -39,9 +39,7 @@ mod dotnet_toolchain_tier3 {
 
             let output = plugin
                 .setup_toolchain(SetupToolchainInput {
-                    configured_version: Some(
-                        UnresolvedVersionSpec::parse("8.0.404").unwrap(),
-                    ),
+                    configured_version: Some(UnresolvedVersionSpec::parse("8.0.404").unwrap()),
                     toolchain_config: json!({}),
                     ..Default::default()
                 })
@@ -59,9 +57,7 @@ mod dotnet_toolchain_tier3 {
 
             plugin
                 .setup_toolchain(SetupToolchainInput {
-                    configured_version: Some(
-                        UnresolvedVersionSpec::parse("canary").unwrap(),
-                    ),
+                    configured_version: Some(UnresolvedVersionSpec::parse("canary").unwrap()),
                     toolchain_config: json!({}),
                     ..Default::default()
                 })
@@ -89,7 +85,11 @@ mod dotnet_toolchain_tier3 {
 
             assert_eq!(output.operations.len(), 1);
 
-            let exe = if cfg!(windows) { "dotnet.exe" } else { "dotnet" };
+            let exe = if cfg!(windows) {
+                "dotnet.exe"
+            } else {
+                "dotnet"
+            };
             assert!(root.join(exe).exists());
             assert!(root.join("sdk").exists());
         }

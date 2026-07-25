@@ -164,9 +164,7 @@ fn apply_outputs(task: &mut PartialTaskConfig, outputs: Option<String>) -> AnyRe
             ]);
         }
         None => {
-            task.options
-                .get_or_insert_default()
-                .cache = Some(TaskOptionCache::Enabled(false));
+            task.options.get_or_insert_default().cache = Some(TaskOptionCache::Enabled(false));
         }
     }
 
@@ -414,7 +412,10 @@ mod tests {
         ]);
         let tasks = infer(&eval, &InferTasksSetting::default(), &[]);
 
-        assert_eq!(tasks.keys().map(|id| id.as_str()).collect::<Vec<_>>(), vec!["build"]);
+        assert_eq!(
+            tasks.keys().map(|id| id.as_str()).collect::<Vec<_>>(),
+            vec!["build"]
+        );
 
         let build = &tasks[&Id::raw("build")];
         assert_eq!(
@@ -523,10 +524,7 @@ mod tests {
 
     #[test]
     fn multi_tfm_exe_skips_publish() {
-        let eval = evaluation(&[
-            ("OutputType", "Exe"),
-            ("TargetFrameworks", "net8.0;net9.0"),
-        ]);
+        let eval = evaluation(&[("OutputType", "Exe"), ("TargetFrameworks", "net8.0;net9.0")]);
         let tasks = infer(&eval, &InferTasksSetting::default(), &[]);
 
         assert!(tasks.contains_key(&Id::raw("run")));
@@ -642,18 +640,22 @@ mod tests {
         );
         // With one project file in the directory neither flavour applies:
         // the command runs in the project directory with no path at all.
-        assert_eq!(infer_with(true, None), "dotnet test --no-build --no-restore");
-        assert_eq!(infer_with(false, None), "dotnet test --no-build --no-restore");
+        assert_eq!(
+            infer_with(true, None),
+            "dotnet test --no-build --no-restore"
+        );
+        assert_eq!(
+            infer_with(false, None),
+            "dotnet test --no-build --no-restore"
+        );
     }
 
     #[test]
     fn project_level_test_platform_opt_in_is_honored() {
         // A project can select MTP on its own, without a global.json.
         let mut eval = test_project_evaluation();
-        eval.properties.insert(
-            "TestingPlatformDotnetTestSupport".into(),
-            "true".into(),
-        );
+        eval.properties
+            .insert("TestingPlatformDotnetTestSupport".into(), "true".into());
 
         let tasks = infer_tasks(
             &InferTasksSetting::default(),
@@ -700,9 +702,7 @@ mod tests {
             vec![("publish", "/workspace/.moon/tasks.yml")]
         );
 
-        assert!(
-            reportable_conflicts(&reserved, &InferTasksSetting::Enabled(false)).is_empty()
-        );
+        assert!(reportable_conflicts(&reserved, &InferTasksSetting::Enabled(false)).is_empty());
         assert!(reportable_conflicts(&BTreeMap::new(), &InferTasksSetting::default()).is_empty());
     }
 

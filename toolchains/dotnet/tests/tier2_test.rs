@@ -285,8 +285,7 @@ mod dotnet_toolchain_tier2 {
             let plugin = sandbox.create_toolchain("dotnet").await;
 
             let mut input = projects_input();
-            input.toolchain_config =
-                json!({ "inferDependencies": false, "inferTasks": ["test"] });
+            input.toolchain_config = json!({ "inferDependencies": false, "inferTasks": ["test"] });
 
             let output = plugin.extend_project_graph(input).await;
 
@@ -304,7 +303,6 @@ mod dotnet_toolchain_tier2 {
                 assert!(project.dependencies.is_empty(), "{id} deps");
                 assert!(project.alias.is_some(), "{id} alias");
             }
-
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -448,7 +446,10 @@ mod dotnet_toolchain_tier2 {
         #[tokio::test(flavor = "multi_thread")]
         async fn broken_project_does_not_abort_graph() {
             let sandbox = create_moon_sandbox("projects");
-            sandbox.create_file("core/Core.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><broken");
+            sandbox.create_file(
+                "core/Core.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><broken",
+            );
 
             let plugin = sandbox.create_toolchain("dotnet").await;
 
@@ -565,9 +566,7 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .parse_lock(ParseLockInput {
-                    path: VirtualPath::Real(
-                        sandbox.path().join("proj/packages.lock.json"),
-                    ),
+                    path: VirtualPath::Real(sandbox.path().join("proj/packages.lock.json")),
                     root: VirtualPath::Real(sandbox.path().into()),
                     ..Default::default()
                 })
@@ -579,13 +578,7 @@ mod dotnet_toolchain_tier2 {
                 newtonsoft[0].version.as_ref().unwrap().to_string(),
                 "13.0.3"
             );
-            assert!(
-                newtonsoft[0]
-                    .hash
-                    .as_deref()
-                    .unwrap()
-                    .starts_with("HrC5")
-            );
+            assert!(newtonsoft[0].hash.as_deref().unwrap().starts_with("HrC5"));
         }
     }
 
@@ -1034,7 +1027,10 @@ mod dotnet_toolchain_tier2 {
             // versionless PackageReference surfaces as "*" — the pinned
             // version reaches the hash through the Directory.Packages.props
             // content below, which is what keeps caching correct.
-            assert_eq!(contents["packages"]["Newtonsoft.Json"].as_str().unwrap(), "*");
+            assert_eq!(
+                contents["packages"]["Newtonsoft.Json"].as_str().unwrap(),
+                "*"
+            );
 
             let configs = contents["configs"].as_object().unwrap();
             assert!(
@@ -1218,11 +1214,11 @@ mod dotnet_toolchain_tier2 {
                 .await;
 
             assert_eq!(output.env.get("DOTNET_ROOT").unwrap(), "/custom/dotnet");
+            assert_eq!(output.env.get("DOTNET_CLI_TELEMETRY_OPTOUT").unwrap(), "1");
             assert_eq!(
-                output.env.get("DOTNET_CLI_TELEMETRY_OPTOUT").unwrap(),
-                "1"
+                output.paths,
+                vec![std::path::PathBuf::from("/custom/dotnet")]
             );
-            assert_eq!(output.paths, vec![std::path::PathBuf::from("/custom/dotnet")]);
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -1230,7 +1226,11 @@ mod dotnet_toolchain_tier2 {
             let sandbox = create_empty_moon_sandbox();
 
             // A real SDK layout has the dotnet host executable at the root.
-            let exe = if cfg!(windows) { "dotnet.exe" } else { "dotnet" };
+            let exe = if cfg!(windows) {
+                "dotnet.exe"
+            } else {
+                "dotnet"
+            };
             sandbox.create_file(format!(".home/.dotnet/{exe}").as_str(), "");
 
             let plugin = sandbox.create_toolchain("dotnet").await;
@@ -1261,7 +1261,11 @@ mod dotnet_toolchain_tier2 {
 
             // A leftover ~/.dotnet holding only SDK 8 — the exact shape that
             // made every task fail against a 10.x pin in a real repo.
-            let exe = if cfg!(windows) { "dotnet.exe" } else { "dotnet" };
+            let exe = if cfg!(windows) {
+                "dotnet.exe"
+            } else {
+                "dotnet"
+            };
             sandbox.create_file(format!(".home/.dotnet/{exe}").as_str(), "");
             sandbox.create_file(".home/.dotnet/sdk/8.0.423/marker", "");
             sandbox.create_file(
@@ -1306,7 +1310,11 @@ mod dotnet_toolchain_tier2 {
         async fn uses_home_fallback_that_satisfies_global_json() {
             let sandbox = create_moon_sandbox("projects");
 
-            let exe = if cfg!(windows) { "dotnet.exe" } else { "dotnet" };
+            let exe = if cfg!(windows) {
+                "dotnet.exe"
+            } else {
+                "dotnet"
+            };
             sandbox.create_file(format!(".home/.dotnet/{exe}").as_str(), "");
             sandbox.create_file(".home/.dotnet/sdk/10.0.301/marker", "");
             sandbox.create_file(

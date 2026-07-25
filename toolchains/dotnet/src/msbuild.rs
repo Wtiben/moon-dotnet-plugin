@@ -720,7 +720,10 @@ mod tests {
         let xml = moon_eval_targets_xml();
 
         for prop in EVAL_PROPERTIES.split(',') {
-            assert!(xml.contains(&format!("<{prop}>$({prop})</{prop}>")), "{prop}");
+            assert!(
+                xml.contains(&format!("<{prop}>$({prop})</{prop}>")),
+                "{prop}"
+            );
         }
 
         assert!(xml.contains("MoonProjectRefs"));
@@ -738,7 +741,9 @@ mod tests {
         assert!(xml.contains("Include=\"/home/x/b &amp; c/b.csproj\""));
         // Both hooks: plain SDK projects import CustomAfterMicrosoftCommonTargets,
         // multi-TFM outer builds import the CrossTargeting variant instead.
-        assert!(xml.contains("CustomAfterMicrosoftCommonTargets=$(MSBuildThisFileDirectory)moon-eval.targets"));
+        assert!(xml.contains(
+            "CustomAfterMicrosoftCommonTargets=$(MSBuildThisFileDirectory)moon-eval.targets"
+        ));
         assert!(xml.contains("CustomAfterMicrosoftCommonCrossTargetingTargets=$(MSBuildThisFileDirectory)moon-eval.targets"));
         assert!(xml.contains("BuildInParallel=\"true\""));
         assert!(xml.contains("ContinueOnError=\"WarnAndContinue\""));
@@ -769,7 +774,9 @@ https://aka.ms/dotnet/sdk-not-found";
         assert!(!is_sdk_resolution_failure(
             "C:\\repo\\app\\App.csproj(1,41): error MSB4025: The project file could not be loaded."
         ));
-        assert!(!is_sdk_resolution_failure("error MSB1009: Project file does not exist."));
+        assert!(!is_sdk_resolution_failure(
+            "error MSB1009: Project file does not exist."
+        ));
     }
 
     #[test]
@@ -784,7 +791,10 @@ https://aka.ms/dotnet/sdk-not-found";
             "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\scratch\\ok\\Ok.csproj".to_string(),
         ];
 
-        assert_eq!(detect_failed_projects(output, &paths), vec![paths[0].clone()]);
+        assert_eq!(
+            detect_failed_projects(output, &paths),
+            vec![paths[0].clone()]
+        );
         assert!(detect_failed_projects("no errors here", &paths).is_empty());
     }
 
@@ -794,6 +804,9 @@ https://aka.ms/dotnet/sdk-not-found";
             normalize_path_key("C:\\Abs\\Path\\LibA\\LibA.csproj"),
             "c:/abs/path/liba/liba.csproj"
         );
-        assert_eq!(normalize_path_key("/home/x/App.csproj"), "/home/x/app.csproj");
+        assert_eq!(
+            normalize_path_key("/home/x/App.csproj"),
+            "/home/x/app.csproj"
+        );
     }
 }

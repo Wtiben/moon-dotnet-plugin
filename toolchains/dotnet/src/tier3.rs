@@ -35,7 +35,11 @@ fn collect_global_json_files(dir: &VirtualPath, depth: u8, out: &mut Vec<Virtual
         };
 
         if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            if depth > 0 && !SKIP_DIRS.iter().any(|skip| skip.eq_ignore_ascii_case(&name)) {
+            if depth > 0
+                && !SKIP_DIRS
+                    .iter()
+                    .any(|skip| skip.eq_ignore_ascii_case(&name))
+            {
                 subdirs.push(name);
             }
         } else if name.eq_ignore_ascii_case("global.json") {
