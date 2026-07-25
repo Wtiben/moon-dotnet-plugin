@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-#### 🚀 Features
+#### 🚀 Updates
 
 - Task hashing now reuses the package sets from the batched graph evaluation instead of spawning
   one `dotnet msbuild` per project. Workspaces without `packages.lock.json` were paying a full
@@ -24,7 +24,7 @@
   and how to change it. Yielding was silent, so a workspace whose `.moon/tasks/*.yml` defines
   `build` simply had no inferred build tasks and no visible reason why.
 
-#### 🐛 Fixes
+#### 🐞 Fixes
 
 - `global.json` SDK-pin discovery now stops at the nearest file, matching the dotnet host, which
   resolves exactly one `global.json` and neither merges them nor keeps searching. A nearer file
@@ -84,7 +84,16 @@
 
 ## 0.2.0
 
-#### 🚀 Features
+#### 💥 Breaking
+
+- `inferTasks` now defaults to **enabled** (previously off and experimental). Projects gain
+  `build`/`test`/`run`/`publish` tasks automatically; opt out with `inferTasks: false` or
+  select granularly with a list. If an inherited task file defines the same task ids, those
+  ids are skipped automatically.
+- The `hash_task_contents` payload shape changed (`lockfile`/`props` → `lockfiles`/`configs`
+  maps), so all task hashes invalidate once on upgrade.
+
+#### 🚀 Updates
 
 - **Tier 3**: `setup_toolchain` installs the .NET SDK when `version:` is configured in
   `.moon/toolchains.yml`, via the official dotnet-install scripts into `~/.dotnet` (or
@@ -141,22 +150,13 @@
   soak test that generates a 60-project workspace and verifies every inferred edge
   (`cargo test -- --ignored soak`; 3.6s locally).
 
-#### 🐛 Fixes
+#### 🐞 Fixes
 
 - `initialize_toolchain` now points at the real repository docs URL.
 
-#### ⚠️ Breaking
-
-- `inferTasks` now defaults to **enabled** (previously off and experimental). Projects gain
-  `build`/`test`/`run`/`publish` tasks automatically; opt out with `inferTasks: false` or
-  select granularly with a list. If an inherited task file defines the same task ids, those
-  ids are skipped automatically.
-- The `hash_task_contents` payload shape changed (`lockfile`/`props` → `lockfiles`/`configs`
-  maps), so all task hashes invalidate once on upgrade.
-
 ## 0.1.0
 
-#### 🚀 Features
+#### 🚀 Updates
 
 - Initial release.
 - Tier 1: project usage detection (`*.csproj`/`*.sln`/`global.json`/props files), config schema,
