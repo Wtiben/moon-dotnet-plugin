@@ -340,15 +340,31 @@ pub fn is_sdk_resolution_failure(output: &str) -> bool {
 }
 
 /// Given the output of a failed batch invocation, find which of the input
-/// projects MSBuild reported errors for. Error lines carry the
-/// locale-invariant `<full path>(line,col): error CODE:` prefix, so a
-/// normalized substring match identifies the offenders without parsing
-/// localized message text. Only the trailing `<parent>/<file>(` suffix is
-/// matched, not the full path: MSBuild prints expanded long paths, which
-/// can differ lexically from the paths we passed (e.g. Windows 8.3 short
-/// names like `RUNNER~1` in a temp-dir prefix). A shared suffix across two
-/// projects merely over-excludes — those projects fall back to per-project
-/// evaluation, which stays correct.
+/// projects MSBuild reported diagnostics for.
+///
+/// MSBuild writes the file in two shapes, and both have to be recognized:
+///
+/// ```text
+/// <path>(6,3): error MSB4025: The project file could not be loaded. ...
+/// <path> : error : Could not resolve SDK "Totally.Bogus.Sdk". ...
+/// ```
+///
+/// The second form — no line/column, emitted for SDK resolution among others —
+/// was missed, so a batch killed by an unresolvable SDK reference identified no
+/// offender, the retry below never fired, and the whole batch was discarded.
+///
+/// Only the trailing `<parent>/<file>` suffix is matched, not the full path:
+/// MSBuild prints expanded long paths, which can differ lexically from the ones
+/// we passed (e.g. Windows 8.3 short names like `RUNNER~1` in a temp-dir
+/// prefix). Both anchors keep the match at a token boundary so `App.csproj`
+/// cannot match `MyApp.csproj`.
+///
+/// Deliberately not filtered to lines containing `": error "`: MSBuild localizes
+/// diagnostic text, so that would break on a non-English host. The cost is that
+/// a path mentioned in a *warning* is treated as failed too — which merely
+/// over-excludes, and an over-excluded project falls back to per-project
+/// evaluation and stays correct. The same is true of a suffix shared by two
+/// projects.
 pub fn detect_failed_projects(output: &str, project_paths: &[String]) -> Vec<String> {
     let haystack = normalize_path_key(output);
 
@@ -365,7 +381,7 @@ pub fn detect_failed_projects(output: &str, project_paths: &[String]) -> Vec<Str
                 .map(|(index, _)| &normalized[index..])
                 .unwrap_or(&normalized);
 
-            haystack.contains(&format!("{suffix}("))
+            haystack.contains(&format!("{suffix}(")) || haystack.contains(&format!("{suffix} :"))
         })
         .cloned()
         .collect()
@@ -796,6 +812,25 @@ https://aka.ms/dotnet/sdk-not-found";
             vec![paths[0].clone()]
         );
         assert!(detect_failed_projects("no errors here", &paths).is_empty());
+    }
+
+    #[test]
+    fn detects_failed_projects_without_a_line_and_column() {
+        // Verbatim shape from SDK 10.0.201 for an unresolvable SDK reference:
+        // no line/column, and no error code either. Matching only the
+        // `<path>(line,col):` form left the batch with no offender to exclude,
+        // so the retry never happened.
+        let output = "C:\\ws\\bad\\BadSdk.csproj : error : Could not resolve SDK \"Totally.Bogus.Sdk\". Exactly one of the probing messages below indicates why we could not resolve the SDK.";
+
+        let paths = vec![
+            "C:\\ws\\bad\\BadSdk.csproj".to_string(),
+            "C:\\ws\\ok\\Ok.csproj".to_string(),
+        ];
+
+        assert_eq!(
+            detect_failed_projects(output, &paths),
+            vec![paths[0].clone()]
+        );
     }
 
     #[test]

@@ -26,6 +26,11 @@
 
 #### 🐛 Fixes
 
+- Batch evaluation now identifies failing projects from MSBuild's positionless
+  `<path> : error ...` diagnostics, not just the `<path>(line,col): error CODE:` form. An
+  unresolvable SDK reference emits the former, so no offender was detected, the retry-without-it
+  never fired, and the entire batch was discarded in favour of per-project evaluation — correct, but
+  it silently gave up the batching speedup on exactly the workspaces that need it.
 - `setup_toolchain` now fetches the `dotnet-install` script once instead of on every moon
   invocation. A code comment claimed moon fingerprint-caches this action; it does not —
   `create_hash_and_return_lock` has no "manifest exists, skip" short-circuit — so every single
