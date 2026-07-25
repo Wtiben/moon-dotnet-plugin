@@ -168,20 +168,26 @@ pub fn setup_toolchain(
         return Ok(Json(output));
     }
 
-    // Stage the official install script under moon's cache dir. Fetched
-    // fresh on every run — the setup action itself is fingerprint-cached
-    // by moon, so this executes rarely.
+    // Stage the official install script under moon's cache dir, fetched once.
+    // moon does not fingerprint-cache this action — `setup_toolchain` uses
+    // `create_hash_and_return_lock`, which unlike the `_if_changed` variant has
+    // no "manifest exists, skip" short-circuit — so this function runs on every
+    // moon invocation. Re-downloading each time made every command depend on
+    // reaching dot.net, which breaks offline and air-gapped workspaces
+    // outright. Delete the file to force a re-fetch.
     let script_file = input
         .context
         .workspace_root
         .join(".moon/cache/dotnet-toolchain")
         .join(install_script_file_name(windows));
 
-    if let Some(parent) = script_file.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    if !script_file.exists() {
+        if let Some(parent) = script_file.parent() {
+            fs::create_dir_all(parent)?;
+        }
 
-    fs::write_file(&script_file, fetch_text(install_script_url(windows))?)?;
+        fs::write_file(&script_file, fetch_text(install_script_url(windows))?)?;
+    }
 
     let Some(script_path) = script_file.real_path() else {
         return Err(plugin_err!(
@@ -215,6 +221,12 @@ pub fn setup_toolchain(
 
     let command = if windows { "powershell.exe" } else { "bash" };
 
+    // Known limitation: for a channel or alias (`version: '8.0'`, `'lts'`) the
+    // script still runs on every invocation, because only the server can say
+    // which patch a channel currently resolves to. It exits early once that SDK
+    // is present, but it does need the network to find out. Pin a
+    // fully-qualified version to take the exact-version path above and skip
+    // this entirely.
     let mut operation = Operation::new("install-sdk")?;
     let result = exec(ExecCommandInput::pipe(command, args))?;
 

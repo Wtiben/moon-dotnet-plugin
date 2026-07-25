@@ -26,6 +26,14 @@
 
 #### 🐛 Fixes
 
+- `setup_toolchain` now fetches the `dotnet-install` script once instead of on every moon
+  invocation. A code comment claimed moon fingerprint-caches this action; it does not —
+  `create_hash_and_return_lock` has no "manifest exists, skip" short-circuit — so every single
+  command re-downloaded the script over HTTPS, which broke offline and air-gapped workspaces and
+  cost everyone else seconds per command. A fully-qualified `version:` already skipped the network
+  entirely when that SDK was present; channels and aliases (`'8.0'`, `'lts'`) still run the script
+  each time, since only the server can resolve which patch a channel points at, and that is now
+  documented rather than implied.
 - The evaluated package-set cache is no longer written when evaluation was incomplete. A missing
   `dotnet`, an unloadable project, or a project file without a host path previously persisted a
   **partial or empty** set under a digest that then validated forever. Since that set is the only
