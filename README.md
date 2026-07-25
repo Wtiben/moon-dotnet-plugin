@@ -49,8 +49,9 @@ dotnet:
 moon downloads the wasm from the GitHub release and caches it — there is nothing to
 install locally.
 
-Projects need no `moon.yml` at all when task inference is enabled (the default). Add
-one only to override or extend what the plugin contributes:
+Projects need no `moon.yml` **configuration** when task inference is enabled (the
+default) — language, toolchain, tasks, and dependencies are all inferred. Add
+configuration only to override or extend what the plugin contributes:
 
 ```yaml
 language: 'csharp'   # moon rejects 'c#'
@@ -66,8 +67,24 @@ tasks:
       - '*.csproj'
 ```
 
-Project discovery stays moon's job: list your projects in `.moon/workspace.yml` as
-usual. Solution files are never parsed — `.sln`/`.slnx` only act as dependency-root
+> **Side note — discovery is still moon's job, and moon has no plugin hook for it.**
+> moon only creates projects that `.moon/workspace.yml` declares; a toolchain plugin
+> cannot contribute projects, and `projects.globs` only match directories or
+> `moon.yml` files — a glob like `'src/**/*.csproj'` is rejected (verified through
+> moon 2.4.5: *"Received a file path for a project root, must be a directory"*). So
+> for a repo with many projects you still need one of:
+>
+> - **Explicit entries or directory globs** in `workspace.yml` covering every
+>   project directory — then there are truly zero `moon.yml` files; or
+> - **One empty `moon.yml` stub per project directory** plus a single glob like
+>   `'src/**/moon.yml'` — the stub only marks the directory as a project, and every
+>   piece of actual configuration is still inferred.
+>
+> Each moon project should be the directory that directly contains one `.csproj` —
+> the plugin deliberately does not search subdirectories, so mapping a whole
+> multi-project "service" folder as one moon project yields no inference.
+
+Solution files are never parsed — `.sln`/`.slnx` only act as dependency-root
 markers.
 
 ## Configuration
@@ -94,7 +111,7 @@ dotnet:
 ## Task inference
 
 **On by default.** Every dotnet project gets standard tasks derived from its real
-MSBuild evaluation — no `moon.yml` needed.
+MSBuild evaluation — no per-project configuration needed.
 
 This is deliberately more proactive than moon's built-in toolchains (the JavaScript
 toolchain only mirrors *user-declared* `package.json` scripts, and opt-in at that).
