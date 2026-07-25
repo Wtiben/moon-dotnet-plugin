@@ -952,6 +952,90 @@ mod dotnet_toolchain_tier2 {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        async fn reuses_the_package_set_from_the_batched_graph_evaluation() {
+            let sandbox = create_moon_sandbox("projects");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            // Build the graph first: that is where the single batched
+            // evaluation happens, and it primes the on-disk package sets.
+            let mut graph_input = ExtendProjectGraphInput::default();
+            graph_input
+                .project_sources
+                .insert(Id::raw("app-tests"), "app-tests".into());
+            graph_input.toolchain_config = json!({ "inferTasks": false });
+
+            plugin.extend_project_graph(graph_input).await;
+
+            let cache_file = sandbox
+                .path()
+                .join(".moon/cache/dotnet-toolchain/eval/app-tests.json");
+
+            assert!(
+                cache_file.exists(),
+                "the graph build must persist the evaluated package set"
+            );
+
+            let mut entry: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&cache_file).unwrap()).unwrap();
+            assert_eq!(entry["packages"]["xunit"].as_str().unwrap(), "2.8.0");
+
+            // Swap in a package MSBuild could never report, keeping the
+            // digest: if hashing returns it, the entry was reused instead of
+            // re-evaluating.
+            let digest = entry["digest"].as_str().unwrap().to_string();
+            entry["packages"] = json!({ "SentinelOnlyInCache": "1.2.3" });
+            std::fs::write(&cache_file, entry.to_string()).unwrap();
+
+            let output = plugin
+                .hash_task_contents(HashTaskContentsInput {
+                    project: fragment("app-tests", "app-tests"),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            assert_eq!(
+                output.contents[0]["packages"]["SentinelOnlyInCache"]
+                    .as_str()
+                    .unwrap(),
+                "1.2.3",
+                "task hashing must reuse the primed package set"
+            );
+
+            // Editing the project file must invalidate the entry rather than
+            // serving that stale set. A fresh plugin instance avoids the
+            // in-instance memo from the call above.
+            let csproj = sandbox.path().join("app-tests/App.Tests.csproj");
+            let edited = std::fs::read_to_string(&csproj)
+                .unwrap()
+                .replace("2.8.0", "2.9.0");
+            std::fs::write(&csproj, edited).unwrap();
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .hash_task_contents(HashTaskContentsInput {
+                    project: fragment("app-tests", "app-tests"),
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            let packages = &output.contents[0]["packages"];
+            assert!(
+                packages.get("SentinelOnlyInCache").is_none(),
+                "a project-file edit must invalidate the cached package set"
+            );
+            assert_eq!(packages["xunit"].as_str().unwrap(), "2.9.0");
+
+            // ...and the refreshed entry replaces the stale one on disk.
+            let refreshed: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&cache_file).unwrap()).unwrap();
+            assert_ne!(refreshed["digest"].as_str().unwrap(), digest);
+            assert_eq!(refreshed["packages"]["xunit"].as_str().unwrap(), "2.9.0");
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         async fn skips_projects_without_dotnet_toolchain() {
             let sandbox = create_moon_sandbox("projects");
             let plugin = sandbox.create_toolchain("dotnet").await;

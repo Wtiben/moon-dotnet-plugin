@@ -12,6 +12,7 @@ use moon_pdk::{
     into_virtual_path, is_project_toolchain_enabled, parse_toolchain_config, plugin_err,
 };
 use moon_pdk_api::*;
+use serde::{Deserialize, Serialize};
 use starbase_utils::{fs, yaml};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -270,6 +271,116 @@ fn content_digest(content: &str) -> String {
     }
 
     format!("{hash:016x}")
+}
+
+/// Cached evaluated package set for one moon project, written by the batched
+/// graph evaluation and read back by task hashing.
+#[derive(Debug, Deserialize, Serialize)]
+struct EvalCacheEntry {
+    /// Digest of every file that can change the evaluated package set, so a
+    /// stale entry is never used.
+    digest: String,
+    packages: BTreeMap<String, String>,
+}
+
+/// Where cached package sets live. Under `.moon/cache`, which moon already
+/// treats as disposable.
+fn eval_cache_file(workspace_root: &VirtualPath, project_id: &str) -> VirtualPath {
+    let safe_id = project_id
+        .chars()
+        .map(|char| {
+            if char.is_ascii_alphanumeric() || matches!(char, '-' | '_' | '.') {
+                char
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    workspace_root
+        .join(".moon")
+        .join("cache")
+        .join("dotnet-toolchain")
+        .join("eval")
+        .join(format!("{safe_id}.json"))
+}
+
+/// Digest of everything that can change a project's evaluated package set:
+/// its project files, plus every config file from the project directory up to
+/// the workspace root. Effects of custom `<Import>`s outside the
+/// `Directory.Build.*` conventions are not captured — the same caveat that
+/// already applies to task hashing itself.
+fn eval_cache_digest(project_root: &VirtualPath, workspace_root: &VirtualPath) -> String {
+    let mut buffer = String::new();
+
+    for file in find_project_files(project_root) {
+        buffer.push_str(&fs::read_file(&file).unwrap_or_default());
+    }
+
+    let mut current = Some(project_root.to_owned());
+
+    while let Some(dir) = current {
+        for file in find_config_files(&dir) {
+            buffer.push_str(&fs::read_file(&file).unwrap_or_default());
+        }
+
+        if dir.any_path() == workspace_root.any_path() {
+            break;
+        }
+
+        current = dir.parent();
+    }
+
+    content_digest(&buffer)
+}
+
+/// Persist a project's evaluated package set for task hashing to reuse.
+///
+/// Task hashing needs the same data the project graph just evaluated, but
+/// runs later (often in a separate process, against a cached project graph),
+/// so it cannot rely on in-memory state. Without this, a workspace without
+/// lock files pays one MSBuild evaluation *per project* during hashing —
+/// which is what the batched graph evaluation exists to avoid.
+fn write_eval_cache(
+    workspace_root: &VirtualPath,
+    project_id: &str,
+    project_root: &VirtualPath,
+    packages: BTreeMap<String, String>,
+) {
+    let file = eval_cache_file(workspace_root, project_id);
+
+    let entry = EvalCacheEntry {
+        digest: eval_cache_digest(project_root, workspace_root),
+        packages,
+    };
+
+    // Best-effort: a failed write only costs a re-evaluation later. Two tasks
+    // of the same project can race here, but they write identical content and
+    // a torn read simply fails to parse (also a re-evaluation).
+    if let Some(parent) = file.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    if let Ok(json) = serde_json::to_string(&entry) {
+        let _ = fs::write_file(&file, json);
+    }
+}
+
+/// Read a project's cached package set, if it is still current.
+fn read_eval_cache(
+    workspace_root: &VirtualPath,
+    project_id: &str,
+    project_root: &VirtualPath,
+) -> Option<BTreeMap<String, String>> {
+    let file = eval_cache_file(workspace_root, project_id);
+
+    if !file.exists() {
+        return None;
+    }
+
+    let entry: EvalCacheEntry = serde_json::from_str(&fs::read_file(&file).ok()?).ok()?;
+
+    (entry.digest == eval_cache_digest(project_root, workspace_root)).then_some(entry.packages)
 }
 
 /// SDK versions laid out under a `DOTNET_ROOT` (`<root>/sdk/<version>`).
@@ -675,6 +786,8 @@ pub fn extend_project_graph(
     for (id, files) in &project_files {
         let mut project_output = ExtendProjectOutput::default();
         let mut seen_deps: BTreeMap<Id, ()> = BTreeMap::new();
+        // Package set collected for the task-hashing cache below.
+        let mut packages: BTreeMap<String, String> = BTreeMap::new();
 
         for file in files {
             let Some(real_path) = file.real_path() else {
@@ -709,6 +822,8 @@ pub fn extend_project_graph(
                     }
                 }
             };
+
+            packages.extend(evaluation.package_references());
 
             // Project alias from the evaluated AssemblyName, so tasks can
             // reference the project by its .NET name (e.g.
@@ -809,6 +924,24 @@ pub fn extend_project_graph(
             if let Some(virtual_file) = file.virtual_path() {
                 output.input_files.push(virtual_file);
             }
+        }
+
+        // Hand the evaluated package set to task hashing. Projects with a
+        // lock file take the lock-file branch there and never need it.
+        let project_root = input
+            .project_sources
+            .get(id)
+            .map(|source| input.context.workspace_root.join(source));
+
+        if let Some(project_root) = project_root
+            && find_lock_files(&project_root).is_empty()
+        {
+            write_eval_cache(
+                &input.context.workspace_root,
+                id.as_str(),
+                &project_root,
+                packages,
+            );
         }
 
         if !project_output.dependencies.is_empty()
@@ -1110,15 +1243,25 @@ pub fn hash_task_contents(
 
     // No lock file: hash the *evaluated* PackageReference set instead.
     //
-    // Cache the evaluated package set per project within this plugin
-    // instance — hash_task_contents runs once per task and MSBuild
-    // evaluation costs ~0.5s.
+    // Three levels of reuse, because this function runs once per task and a
+    // cold MSBuild evaluation costs ~0.5s per project:
+    //   1. a plugin-instance var, for repeated tasks of the same project;
+    //   2. the on-disk cache the batched graph evaluation primed, which is
+    //      what keeps a lock-file-less workspace from paying one evaluation
+    //      per project here (the batch already evaluated them all at once);
+    //   3. evaluating this project alone.
     let cache_key = format!("eval-packages:{}", input.project.id);
 
     let packages: BTreeMap<String, String> = if let Some(cached) =
         var::get::<String>(&cache_key)?
     {
         serde_json::from_str(&cached)?
+    } else if let Some(cached) =
+        read_eval_cache(workspace_root, input.project.id.as_str(), &project_root)
+    {
+        var::set(&cache_key, serde_json::to_string(&cached)?)?;
+
+        cached
     } else {
         let mut packages = BTreeMap::new();
         let env = get_host_environment()?;
@@ -1149,6 +1292,14 @@ pub fn hash_task_contents(
         }
 
         var::set(&cache_key, serde_json::to_string(&packages)?)?;
+        // Prime the on-disk cache too, so sibling tasks and later runs skip
+        // the evaluation even when the project graph was already cached.
+        write_eval_cache(
+            workspace_root,
+            input.project.id.as_str(),
+            &project_root,
+            packages.clone(),
+        );
 
         packages
     };

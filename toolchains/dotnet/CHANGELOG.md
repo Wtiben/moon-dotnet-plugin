@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+#### 🚀 Features
+
+- Task hashing now reuses the package sets from the batched graph evaluation instead of spawning
+  one `dotnet msbuild` per project. Workspaces without `packages.lock.json` were paying a full
+  evaluation per project on every command that hashes tasks — measured on 40 projects with all
+  builds already cached: **5s with the shared results vs 115s without**, scaling linearly with
+  project count. The cache lives in `.moon/cache/dotnet-toolchain/eval/` and is keyed on a digest
+  of each project's own files plus every config file up to the workspace root, so an edit to any
+  of them re-evaluates rather than serving a stale set.
+
 #### 🐛 Fixes
 
 - MSBuild evaluation and tasks now resolve the **same** SDK. Evaluation runs under the same
