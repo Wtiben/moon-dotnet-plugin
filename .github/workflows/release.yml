@@ -86,6 +86,14 @@ jobs:
           grep -F '.NET' info.txt
           grep -F 'inferDependencies' info.txt
 
+      # The action's mkdir of builds/ is not idempotent and the verify pass
+      # already created it — remove it so the publish pass can start clean.
+      # (The publish pass regenerates the artifacts from the same incremental
+      # cargo output the smoke test just validated.)
+      - name: Clean builds dir between passes
+        if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+        run: rm -rf builds
+
       # Second pass: identical build (incremental, same toolchain) that also
       # pushes the OCI artifact to ghcr.io. Only runs after the smoke test.
       - id: publish
