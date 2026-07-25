@@ -417,6 +417,13 @@ fn installed_sdk_versions(root: &VirtualPath) -> Vec<String> {
 /// including) the workspace root — the same direction the dotnet host
 /// searches from its working directory. Returns the file path (for messages)
 /// and the parsed pin.
+///
+/// The search stops at the first `global.json` that exists, whether or not it
+/// declares an `sdk.version`, because that is the one file the dotnet host
+/// resolves — it neither merges them nor keeps looking. Walking past a pinless
+/// file would attribute an ancestor's pin to a directory it does not govern, and
+/// name that non-governing file in the diagnostics. `uses_test_platform_runner`
+/// below already implements this rule; the two must agree.
 fn find_sdk_requirement(
     start: &VirtualPath,
     workspace_root: &VirtualPath,
@@ -426,11 +433,11 @@ fn find_sdk_requirement(
     while let Some(dir) = current {
         let file = dir.join("global.json");
 
-        if file.exists()
-            && let Ok(content) = fs::read_file(&file)
-            && let Some(requirement) = parse_sdk_requirement(&content)
-        {
-            return Some((file.to_string(), requirement));
+        if file.exists() {
+            return fs::read_file(&file)
+                .ok()
+                .and_then(|content| parse_sdk_requirement(&content))
+                .map(|requirement| (file.to_string(), requirement));
         }
 
         if dir.any_path() == workspace_root.any_path() {

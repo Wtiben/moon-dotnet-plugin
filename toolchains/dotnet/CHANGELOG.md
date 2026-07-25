@@ -26,6 +26,11 @@
 
 #### 🐛 Fixes
 
+- `global.json` SDK-pin discovery now stops at the nearest file, matching the dotnet host, which
+  resolves exactly one `global.json` and neither merges them nor keeps searching. A nearer file
+  declaring no `sdk.version` previously let an ancestor's pin apply, so the `~/.dotnet` fallback
+  could be rejected against a pin that does not govern that directory — and the warning named the
+  wrong file. The sibling test-runner lookup already implemented this rule; the two now agree.
 - Batch evaluation now identifies failing projects from MSBuild's positionless
   `<path> : error ...` diagnostics, not just the `<path>(line,col): error CODE:` form. An
   unresolvable SDK reference emits the former, so no offender was detected, the retry-without-it
