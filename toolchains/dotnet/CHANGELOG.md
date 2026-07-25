@@ -26,6 +26,13 @@
 
 #### 🐛 Fixes
 
+- A missing `dotnet` executable no longer fails the project graph. `extend_project_graph` now warns
+  and contributes nothing, matching `parse_manifest` and `hash_task_contents`. The graph is built
+  before the action pipeline runs, so a `version:` configured for the toolchain to install is not
+  installed yet on a fresh machine — erroring meant the first `moon` command failed the
+  whole-workspace graph, for every toolchain, before moon could install the SDK it was told to
+  install. (A `dotnet` that exists but has no SDK satisfying a `global.json` pin still fails once
+  with guidance, as before.)
 - The inferred `test` task now works under **Microsoft.Testing.Platform**, not just VSTest. When a
   project directory holds several project files, the task has to name one — and MTP's `dotnet test`
   takes it through `--project` and rejects a positional path, while classic VSTest mode rejects

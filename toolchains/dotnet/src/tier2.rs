@@ -743,10 +743,19 @@ pub fn extend_project_graph(
 
     let env = get_host_environment()?;
 
+    // Degrade rather than fail, like `parse_manifest` and `hash_task_contents`
+    // below. The graph is built before the action pipeline runs, so a `version:`
+    // configured for tier 3 to install has not been installed yet on a fresh
+    // machine — erroring here would fail the whole-workspace graph, for every
+    // toolchain, before moon ever gets to install the SDK it was told to
+    // install.
     if !command_exists(&env, "dotnet") {
-        return Err(plugin_err!(
-            "dotnet executable not found — install a .NET 8+ SDK or configure proto to provide one."
-        ));
+        host_log!(
+            warn,
+            "No <symbol>dotnet</symbol> executable found on PATH, skipping .NET project graph evaluation — no dependency edges or inferred tasks will be contributed. Install a .NET 8+ SDK, or set <property>version</property> in <file>.moon/toolchains.yml</file> to have moon install one."
+        );
+
+        return Ok(Json(output));
     }
 
     // Evaluate from the deepest directory containing every .NET project, so
