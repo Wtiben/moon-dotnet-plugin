@@ -188,8 +188,28 @@ re-runs the restore and repeat runs skip it. Global tools remain out of scope.
 ## Task inference (`inferTasks`)
 
 **On by default.** Every dotnet project gets standard tasks derived from its
-real MSBuild evaluation — no `moon.yml` needed. `inferTasks: false` turns it
-off entirely; a list (`inferTasks: ['build', 'test']`) infers only those.
+real MSBuild evaluation — no `moon.yml` needed.
+
+This is deliberately more proactive than moon's built-in toolchains (the
+JavaScript toolchain only mirrors *user-declared* `package.json` scripts, and
+opt-in at that). .NET has no equivalent script layer to mirror: without
+inference a zero-config dotnet workspace has no tasks at all, and
+`build`/`test`/`run`/`publish` are the toolchain's own universal verbs rather
+than per-repo conventions — so this plugin treats task inference like
+dependency inference and enables it. It stays safe to leave on because
+inference never overrides anything you wrote yourself (see "Your tasks always
+win" below).
+
+`inferTasks` is a **workspace-level** setting in `.moon/toolchains.yml` — one
+line controls the whole workspace, and turning inference off never requires
+per-project `moon.yml` overrides:
+
+```yaml
+dotnet:
+  inferTasks: true                # default: infer all four tasks
+  # inferTasks: false             # infer nothing
+  # inferTasks: ['build', 'test'] # infer only these
+```
 
 | Task | Inferred for | Command | Cached |
 |---|---|---|---|
