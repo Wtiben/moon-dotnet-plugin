@@ -1212,6 +1212,7 @@ dependencies = [
  "moon_pdk",
  "moon_pdk_api",
  "moon_pdk_test_utils",
+ "moon_target",
  "schematic",
  "serde",
  "serde_json",

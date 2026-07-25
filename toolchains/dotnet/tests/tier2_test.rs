@@ -122,7 +122,7 @@ mod dotnet_toolchain_tier2 {
             let plugin = sandbox.create_toolchain("dotnet").await;
 
             let mut input = projects_input();
-            input.toolchain_config = json!({ "inferDependencies": true });
+            input.toolchain_config = json!({ "inferDependencies": true, "inferTasks": false });
 
             let output = plugin.extend_project_graph(input).await;
 
@@ -155,34 +155,117 @@ mod dotnet_toolchain_tier2 {
             let plugin = sandbox.create_toolchain("dotnet").await;
 
             let mut input = projects_input();
-            input.toolchain_config = json!({ "inferDependencies": false });
+            input.toolchain_config = json!({ "inferDependencies": false, "inferTasks": false });
 
             let output = plugin.extend_project_graph(input).await;
 
             assert!(output.extended_projects.is_empty());
         }
 
+        fn task_ids(project: &ExtendProjectOutput) -> Vec<&str> {
+            project.tasks.keys().map(|id| id.as_str()).collect()
+        }
+
         #[tokio::test(flavor = "multi_thread")]
-        async fn infers_tasks_when_enabled() {
+        async fn infers_tasks_by_default() {
+            let sandbox = create_moon_sandbox("projects");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let mut input = projects_input();
+            input.toolchain_config = json!({});
+
+            let output = plugin.extend_project_graph(input).await;
+
+            // app is an Exe -> build + publish + run.
+            let app = &output.extended_projects[&Id::raw("app")];
+            assert_eq!(task_ids(app), vec!["build", "publish", "run"]);
+
+            let build = &app.tasks[&Id::raw("build")];
+            assert_eq!(
+                build.command,
+                Some(moon_config::PartialTaskArgs::List(vec![
+                    "dotnet".into(),
+                    "build".into(),
+                    "--no-restore".into(),
+                    "--no-dependencies".into(),
+                    "-c".into(),
+                    "Debug".into(),
+                ]))
+            );
+            // Outputs came from the real evaluated BaseOutputPath.
+            assert_eq!(
+                build.outputs,
+                Some(vec![moon_config::Output::parse("bin").unwrap()])
+            );
+            assert!(build.deps.is_some(), "build depends on ^:build");
+
+            // run is never cached and never runs in CI.
+            let run_options = app.tasks[&Id::raw("run")].options.as_ref().unwrap();
+            assert_eq!(
+                run_options.cache,
+                Some(moon_config::TaskOptionCache::Enabled(false))
+            );
+
+            // app-tests references Microsoft.NET.Test.Sdk -> build + test.
+            let tests = &output.extended_projects[&Id::raw("app-tests")];
+            assert_eq!(task_ids(tests), vec!["build", "test"]);
+
+            // Plain classlibs still get a build task.
+            let core = &output.extended_projects[&Id::raw("core")];
+            assert_eq!(task_ids(core), vec!["build"]);
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn infers_only_listed_tasks() {
             let sandbox = create_moon_sandbox("projects");
             let plugin = sandbox.create_toolchain("dotnet").await;
 
             let mut input = projects_input();
             input.toolchain_config =
-                json!({ "inferDependencies": true, "inferTasks": true });
+                json!({ "inferDependencies": false, "inferTasks": ["test"] });
 
             let output = plugin.extend_project_graph(input).await;
 
-            // app is an Exe -> run task.
-            let app = &output.extended_projects[&Id::raw("app")];
-            assert!(app.tasks.contains_key(&Id::raw("run")));
-
-            // app-tests references Microsoft.NET.Test.Sdk -> IsTestProject -> test task.
+            // Only app-tests qualifies for a test task; nothing else
+            // contributes anything.
             let tests = &output.extended_projects[&Id::raw("app-tests")];
-            assert!(tests.tasks.contains_key(&Id::raw("test")));
-
-            // core is a plain classlib -> no tasks, no deps.
+            assert_eq!(task_ids(tests), vec!["test"]);
+            assert!(!output.extended_projects.contains_key(&Id::raw("app")));
             assert!(!output.extended_projects.contains_key(&Id::raw("core")));
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn inference_yields_to_inherited_task_files() {
+            let sandbox = create_moon_sandbox("projects");
+
+            // Applies to dotnet projects: suppresses inferred `build`.
+            sandbox.create_file(
+                ".moon/tasks/dotnet.yml",
+                "inheritedBy:\n  toolchains: ['dotnet']\ntasks:\n  build:\n    command: 'dotnet build'\n",
+            );
+            // Unscoped: assumed to apply -> suppresses inferred `publish`.
+            sandbox.create_file(
+                ".moon/tasks.yml",
+                "tasks:\n  publish:\n    command: 'echo deploy'\n",
+            );
+            // Explicitly scoped to another toolchain: must NOT suppress `run`.
+            sandbox.create_file(
+                ".moon/tasks/node.yml",
+                "inheritedBy:\n  toolchains: ['javascript']\ntasks:\n  run:\n    command: 'node server.js'\n",
+            );
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let mut input = projects_input();
+            input.toolchain_config = json!({ "inferDependencies": false });
+
+            let output = plugin.extend_project_graph(input).await;
+
+            let app = &output.extended_projects[&Id::raw("app")];
+            assert_eq!(task_ids(app), vec!["run"]);
+
+            let tests = &output.extended_projects[&Id::raw("app-tests")];
+            assert_eq!(task_ids(tests), vec!["test"]);
         }
 
         #[tokio::test(flavor = "multi_thread")]

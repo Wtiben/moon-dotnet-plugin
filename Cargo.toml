@@ -9,6 +9,7 @@ moon_config = "2.1.0"
 moon_pdk = "2.0.4"
 moon_pdk_api = "2.0.4"
 moon_pdk_test_utils = "2.0.4"
+moon_target = "3.0.0"
 schematic = { version = "0.19.7", default-features = false, features = ["schema"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["preserve_order"] }

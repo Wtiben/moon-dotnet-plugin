@@ -8,6 +8,18 @@
   `.moon/toolchains.yml`, via the official dotnet-install scripts into `~/.dotnet` (or
   `dotnetRoot`). `X.Y` installs a channel, exact versions install pinned (and skip when
   already present), `lts`/`sts`/`preview` map to named channels.
+- Task inference is no longer experimental and is **enabled by default**: every project gets a
+  cached `build` task (`--no-dependencies` + `deps: ^:build` so moon orchestrates and caches the
+  graph), test projects get `test` (`--no-build` on top of the build dep), and `Exe`/`WinExe`
+  projects get `run` (never cached, excluded from CI) and `publish` (cached, single-TFM only).
+  The setting is now granular: `inferTasks: true | false | ['build', 'test', 'run', 'publish']`.
+  Commands pin the evaluated `Configuration` (dotnet `publish` defaults to Release on .NET 8+
+  while `build` defaults to Debug — they must agree for `--no-build`); outputs come from the
+  evaluated `BaseOutputPath`/`PublishDir` (tasks with output paths outside the workspace run
+  uncached instead of caching the wrong directory); inputs exclude the evaluated
+  output/intermediate dirs so task hashes are stable. Inference never overrides your own tasks:
+  project `moon.yml` tasks replace inferred ones wholesale, and task ids defined in applicable
+  inherited task files (`.moon/tasks*`) are not inferred at all.
 - Project-graph MSBuild evaluation is now batched: a single traversal invocation evaluates
   every project in parallel (in-process worker nodes, target injected via
   `CustomAfterMicrosoftCommon(CrossTargeting)Targets`) instead of spawning one `dotnet msbuild`
@@ -36,6 +48,10 @@
 
 #### ⚠️ Breaking
 
+- `inferTasks` now defaults to **enabled** (previously off and experimental). Projects gain
+  `build`/`test`/`run`/`publish` tasks automatically; opt out with `inferTasks: false` or
+  select granularly with a list. If an inherited task file defines the same task ids, those
+  ids are skipped automatically.
 - The `hash_task_contents` payload shape changed (`lockfile`/`props` → `lockfiles`/`configs`
   maps), so all task hashes invalidate once on upgrade.
 

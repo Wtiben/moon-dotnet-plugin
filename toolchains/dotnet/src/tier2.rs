@@ -1,17 +1,16 @@
 use crate::config::DotnetToolchainConfig;
+use crate::infer_tasks::{InferInputs, infer_tasks};
 use crate::msbuild::{evaluate_project, evaluate_projects_batch, normalize_path_key};
 use crate::nuget_lock::parse_lock_file;
 use extism_pdk::*;
-use moon_config::{
-    DependencyScope, PartialTaskArgs, PartialTaskConfig, UnresolvedVersionSpec, VersionSpec,
-};
+use moon_config::{DependencyScope, UnresolvedVersionSpec, VersionSpec};
 use moon_pdk::{
     HostLogInput, HostLogTarget, command_exists, get_host_env_var, get_host_environment,
     host_log, is_project_toolchain_enabled, parse_toolchain_config, plugin_err,
 };
 use moon_pdk_api::*;
-use starbase_utils::fs;
-use std::collections::BTreeMap;
+use starbase_utils::{fs, yaml};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[host_fn]
 extern "ExtismHost" {
@@ -158,6 +157,104 @@ fn has_solution_file(dir: &VirtualPath) -> bool {
     })
 }
 
+/// Partial shape of an inherited tasks file (`.moon/tasks.yml` or
+/// `.moon/tasks/**/*.yml`) — just enough to know which task ids it defines
+/// and whether it can apply to dotnet projects.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct InheritedTasksFile {
+    inherited_by: Option<InheritedByScope>,
+    tasks: BTreeMap<String, serde::de::IgnoredAny>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct InheritedByScope {
+    toolchains: Option<Vec<String>>,
+    languages: Option<Vec<String>>,
+}
+
+/// Can an inherited tasks file apply to dotnet projects? Only an explicit
+/// `inheritedBy` scope naming other toolchains/languages rules it out;
+/// everything else (unscoped, tag/stack/layer-scoped) is conservatively
+/// assumed to apply — suppressing an inferred task is recoverable, while
+/// moon's args-append merge of an inferred task over an inherited one
+/// produces garbage commands.
+fn applies_to_dotnet(scope: Option<&InheritedByScope>) -> bool {
+    let Some(scope) = scope else {
+        return true;
+    };
+
+    let mut scoped = false;
+
+    if let Some(toolchains) = &scope.toolchains {
+        scoped = true;
+
+        if toolchains.iter().any(|id| id.eq_ignore_ascii_case("dotnet")) {
+            return true;
+        }
+    }
+
+    if let Some(languages) = &scope.languages {
+        scoped = true;
+
+        if languages.iter().any(|lang| {
+            matches!(
+                lang.to_lowercase().as_str(),
+                "csharp" | "c#" | "fsharp" | "f#" | "vb" | "visualbasic" | "dotnet"
+            )
+        }) {
+            return true;
+        }
+    }
+
+    !scoped
+}
+
+fn collect_yaml_files(dir: &VirtualPath, out: &mut Vec<VirtualPath>) {
+    if let Ok(entries) = std::fs::read_dir(dir.any_path()) {
+        for entry in entries.flatten() {
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+
+            let path = dir.join(&name);
+
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                collect_yaml_files(&path, out);
+            } else if name.ends_with(".yml") || name.ends_with(".yaml") {
+                out.push(path);
+            }
+        }
+    }
+}
+
+/// Task ids defined in inherited task files that can apply to dotnet
+/// projects. Inference must never contribute one of these ids — see
+/// `applies_to_dotnet` for why.
+fn load_inherited_task_ids(workspace_root: &VirtualPath) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    let mut files = vec![workspace_root.join(".moon").join("tasks.yml")];
+
+    collect_yaml_files(&workspace_root.join(".moon").join("tasks"), &mut files);
+
+    for file in files {
+        if !file.exists() {
+            continue;
+        }
+
+        // An unparseable file is moon's problem to report; there is nothing
+        // for inference to yield to.
+        if let Ok(parsed) = yaml::read_file::<InheritedTasksFile>(file.any_path()) {
+            if applies_to_dotnet(parsed.inherited_by.as_ref()) {
+                ids.extend(parsed.tasks.into_keys());
+            }
+        }
+    }
+
+    ids
+}
+
 /// Resolve the DOTNET_ROOT to inject into task environments.
 /// Order: explicit config > existing host env var > `~/.dotnet` when it
 /// contains an actual SDK layout (the proto dotnet plugin installs there).
@@ -272,7 +369,9 @@ pub fn extend_project_graph(
     let config = parse_toolchain_config::<DotnetToolchainConfig>(input.toolchain_config)?;
     let mut output = ExtendProjectGraphOutput::default();
 
-    if !config.infer_dependencies && !config.infer_tasks {
+    let infer_tasks_enabled = config.infer_tasks.any_enabled();
+
+    if !config.infer_dependencies && !infer_tasks_enabled {
         return Ok(Json(output));
     }
 
@@ -360,6 +459,23 @@ pub fn extend_project_graph(
         }
     };
 
+    // Inference must yield to task ids already defined in inherited task
+    // files (moon merges plugin tasks over inherited ones with args-append
+    // semantics — a garbage command). Project-level moon.yml needs no such
+    // handling: moon guarantees local tasks win over plugin tasks.
+    let reserved_task_ids = if infer_tasks_enabled {
+        load_inherited_task_ids(&input.context.workspace_root)
+    } else {
+        BTreeSet::new()
+    };
+
+    let workspace_dir = input
+        .context
+        .workspace_root
+        .real_path()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+
     // Pass 3: map each project's ProjectReference items onto moon project ids.
     for (id, files) in &project_files {
         let mut project_output = ExtendProjectOutput::default();
@@ -432,39 +548,45 @@ pub fn extend_project_graph(
                 }
             }
 
-            if config.infer_tasks {
-                // `IsTestProject` is set by Microsoft.NET.Test.Sdk's build
-                // props, which are only imported after a restore. Fall back
-                // to the package reference itself so unrestored projects are
-                // detected too.
-                let is_test_project = evaluation
-                    .property("IsTestProject")
-                    .eq_ignore_ascii_case("true")
-                    || evaluation
-                        .package_references()
-                        .keys()
-                        .any(|name| name.eq_ignore_ascii_case("Microsoft.NET.Test.Sdk"));
+            if infer_tasks_enabled {
+                let project_dir = real_path
+                    .parent()
+                    .map(|dir| dir.to_string_lossy().to_string())
+                    .unwrap_or_default();
 
-                if is_test_project {
-                    project_output.tasks.entry(Id::raw("test")).or_insert_with(|| {
-                        PartialTaskConfig {
-                            command: Some(PartialTaskArgs::String("dotnet test".into())),
-                            ..Default::default()
+                // Bare `dotnet build` errors on ambiguity when the directory
+                // holds several project files — pass the file explicitly.
+                let explicit_project_file = if files.len() > 1 {
+                    file.file_name().and_then(|name| name.to_str())
+                } else {
+                    None
+                };
+
+                let inferred = infer_tasks(
+                    &config.infer_tasks,
+                    &reserved_task_ids,
+                    &InferInputs {
+                        evaluation: &evaluation,
+                        explicit_project_file,
+                        project_dir: &project_dir,
+                        workspace_dir: &workspace_dir,
+                    },
+                );
+
+                match inferred {
+                    Ok(tasks) => {
+                        for (task_id, task) in tasks {
+                            project_output.tasks.entry(task_id).or_insert(task);
                         }
-                    });
-                }
-
-                let output_type = evaluation.property("OutputType");
-
-                if output_type.eq_ignore_ascii_case("Exe")
-                    || output_type.eq_ignore_ascii_case("WinExe")
-                {
-                    project_output.tasks.entry(Id::raw("run")).or_insert_with(|| {
-                        PartialTaskConfig {
-                            command: Some(PartialTaskArgs::String("dotnet run".into())),
-                            ..Default::default()
-                        }
-                    });
+                    }
+                    Err(error) => {
+                        host_log!(
+                            warn,
+                            "Task inference failed for project <id>{}</id>: {}",
+                            id,
+                            error
+                        );
+                    }
                 }
             }
 

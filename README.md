@@ -44,7 +44,7 @@ is the source of project discovery).
 dotnet:
   plugin: 'github://Wtiben/moon-dotnet-plugin@v0.2.0'
   inferDependencies: true   # default
-  inferTasks: false         # default; experimental
+  inferTasks: true          # default; or false, or ['build', 'test', 'run', 'publish']
   restoreArgs: []           # extra args for `dotnet restore`
   # dotnetRoot: 'C:/Users/me/.dotnet'
 ```
@@ -53,7 +53,9 @@ moon downloads the wasm from the GitHub release and caches it — nothing to ins
 For local development a `file://` locator also works:
 `plugin: 'file://../path/to/dotnet_toolchain.wasm'` (relative from the `.moon` dir).
 
-`moon.yml` (per project):
+`moon.yml` (per project) — with task inference on (the default), projects need
+none at all; `build`/`test`/`run`/`publish` are contributed automatically (see
+"Task inference" below). Add one only to override or extend:
 
 ```yaml
 language: 'csharp'   # moon rejects 'c#' (verified through 2.4.5)
@@ -62,8 +64,8 @@ toolchains:
   default: 'dotnet'
 
 tasks:
-  build:
-    command: 'dotnet build --no-restore'
+  build:              # your own task with this id fully replaces the inferred one
+    command: 'dotnet build --no-restore -c Release'
     inputs:
       - '**/*.cs'
       - '*.csproj'
@@ -145,13 +147,57 @@ keep lock files committed and current.
   each focused project. NuGet's user-level cache is not touched in v1.
 - Add `.moon/cache` (and ideally `.moon/docker`) to `.dockerignore`.
 
-## Task inference (`inferTasks`, experimental)
+## Task inference (`inferTasks`)
 
-When enabled, projects evaluating `IsTestProject=true` **or** referencing
-`Microsoft.NET.Test.Sdk` get a `test` task (`dotnet test`), and `OutputType`
-`Exe`/`WinExe` projects get a `run` task (`dotnet run`). Note `IsTestProject`
-is only set by the test SDK's build props after a restore, hence the package
-reference fallback. Off by default.
+**On by default.** Every dotnet project gets standard tasks derived from its
+real MSBuild evaluation — no `moon.yml` needed. `inferTasks: false` turns it
+off entirely; a list (`inferTasks: ['build', 'test']`) infers only those.
+
+| Task | Inferred for | Command | Cached |
+|---|---|---|---|
+| `build` | every project | `dotnet build --no-restore --no-dependencies -c <cfg>` + `deps: ['^:build']` | ✅ outputs from evaluated `BaseOutputPath` |
+| `test` | `IsTestProject=true` or a `Microsoft.NET.Test.Sdk` reference | `dotnet test --no-build --no-restore -c <cfg>` + `deps: ['~:build']` | ✅ (pass/fail state) |
+| `run` | `Exe`/`WinExe`, non-test | `dotnet run` | never cached, excluded from CI |
+| `publish` | `Exe`/`WinExe`, non-test, single-TFM | `dotnet publish --no-build --no-restore -c <cfg>` + `deps: ['~:build']` | ✅ outputs from evaluated `PublishDir` |
+
+Design notes (each of these is verified by tests):
+
+- **moon orchestrates the graph, not MSBuild**: `build` uses
+  `--no-dependencies` and depends on `^:build`, so each project builds and
+  caches independently. MSBuild resolves `ProjectReference`s from the
+  upstream `bin` without rebuilding it, and moon re-runs downstream builds
+  when an upstream project changes (dependency hashes cascade).
+- **The configuration is pinned** (`-c`) to whatever the evaluation saw
+  (Debug unless your props say otherwise) — necessary because `dotnet
+  publish` defaults to *Release* on .NET 8+ while `build` defaults to
+  *Debug*, which would break `--no-build`. A repo that sets `Configuration`
+  in `Directory.Build.props` gets that configuration everywhere,
+  consistently. For a one-off Release publish, define your own task.
+- **Outputs come from evaluated paths**, so redirected output locations
+  (custom `BaseOutputPath`, .NET 8 `UseArtifactsOutput` under the workspace
+  root) cache correctly. If an output path resolves outside the workspace,
+  the task runs **uncached** rather than caching the wrong directory.
+- **Inputs exclude the evaluated output/intermediate dirs** (`bin`/`obj` by
+  default) — MSBuild mutates `obj` on every build, so including it would
+  make hashes unstable and defeat caching.
+- **`restore` is deliberately not a task**: moon models it as the
+  install-dependencies action (with `--locked-mode`), which runs before
+  tasks — hence `--no-restore` everywhere.
+- **Your tasks always win.** A task with the same id in a project's
+  `moon.yml` fully replaces the inferred one (moon guarantees this), and
+  ids defined in inherited task files (`.moon/tasks.yml`,
+  `.moon/tasks/**/*.yml`) that can apply to dotnet projects are never
+  inferred at all — moon would otherwise merge the two into a broken
+  command. Files explicitly scoped to other toolchains/languages via
+  `inheritedBy` don't suppress anything.
+- Directories with several project files get the file passed explicitly
+  (`dotnet build App.csproj ...`).
+- `IsTestProject` is only set by the test SDK's build props after a restore,
+  hence the package-reference fallback for test detection.
+
+Known limits: multi-TFM projects get no `publish` task (`dotnet publish`
+needs an explicit `-f` there); `pack`, `watch`, and `clean` are not inferred
+(define them yourself if needed).
 
 ## Releasing
 

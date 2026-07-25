@@ -56,8 +56,10 @@ impl MsbuildEvaluation {
 }
 
 /// The exact `-getProperty` list requested per evaluation.
-pub const EVAL_PROPERTIES: &str =
-    "TargetFramework,TargetFrameworks,OutputType,IsTestProject,IsPackable,RestorePackagesWithLockFile";
+/// `BaseOutputPath`/`BaseIntermediateOutputPath`/`PublishDir` feed inferred
+/// task outputs and input exclusions (they follow redirected output
+/// locations, e.g. .NET 8 `UseArtifactsOutput`).
+pub const EVAL_PROPERTIES: &str = "TargetFramework,TargetFrameworks,OutputType,IsTestProject,IsPackable,RestorePackagesWithLockFile,BaseOutputPath,BaseIntermediateOutputPath,PublishDir,Configuration";
 
 /// The exact `-getItem` list requested per evaluation.
 pub const EVAL_ITEMS: &str = "ProjectReference,PackageReference";
