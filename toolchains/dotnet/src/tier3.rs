@@ -2,12 +2,115 @@ use crate::config::DotnetToolchainConfig;
 use crate::dotnet_install::{
     exact_version, install_script_file_name, install_script_url, install_version_args,
 };
+use crate::global_json::{parse_sdk_requirement, satisfies};
 use extism_pdk::*;
 use moon_pdk::{
-    exec, fetch_text, get_host_environment, into_virtual_path, parse_toolchain_config, plugin_err,
+    HostLogInput, HostLogTarget, exec, fetch_text, get_host_environment, host_log,
+    into_virtual_path, parse_toolchain_config, plugin_err,
 };
 use moon_pdk_api::*;
 use starbase_utils::fs;
+
+#[host_fn]
+extern "ExtismHost" {
+    fn host_log(input: Json<HostLogInput>);
+}
+
+/// Directories never worth searching for a `global.json`.
+const SKIP_DIRS: &[&str] = &["bin", "obj", "node_modules", ".git", ".moon"];
+
+/// Collect `global.json` files in the workspace (depth-limited). Unlike task
+/// environments, setup has no project to walk up from — and the pin often
+/// lives in a subtree (`src/backend/global.json`) rather than at the root.
+fn collect_global_json_files(dir: &VirtualPath, depth: u8, out: &mut Vec<VirtualPath>) {
+    let Ok(entries) = std::fs::read_dir(dir.any_path()) else {
+        return;
+    };
+
+    let mut subdirs = vec![];
+
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            if depth > 0 && !SKIP_DIRS.iter().any(|skip| skip.eq_ignore_ascii_case(&name)) {
+                subdirs.push(name);
+            }
+        } else if name.eq_ignore_ascii_case("global.json") {
+            out.push(dir.join(&name));
+        }
+    }
+
+    for name in subdirs {
+        collect_global_json_files(&dir.join(name), depth - 1, out);
+    }
+}
+
+/// SDK versions laid out under an install root (`<root>/sdk/<version>`).
+fn installed_sdk_versions(root: &VirtualPath) -> Vec<String> {
+    let mut versions = vec![];
+
+    if let Ok(entries) = std::fs::read_dir(root.join("sdk").any_path()) {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && let Ok(name) = entry.file_name().into_string()
+            {
+                versions.push(name);
+            }
+        }
+    }
+
+    versions
+}
+
+/// Warn when the SDKs now present in the install root cannot serve a
+/// `global.json` pin in the workspace. Installing 8.0 while a subtree pins
+/// 10.x is a silent misconfiguration otherwise: setup succeeds and every task
+/// in that subtree fails later with the host's own error.
+///
+/// A warning rather than an error: the pinned subtree may deliberately rely
+/// on a system-wide SDK instead of the one moon manages.
+fn warn_on_unsatisfied_pins(
+    workspace_root: &VirtualPath,
+    install_root: &VirtualPath,
+) -> AnyResult<()> {
+    let mut files = vec![];
+    collect_global_json_files(workspace_root, 4, &mut files);
+
+    if files.is_empty() {
+        return Ok(());
+    }
+
+    let installed = installed_sdk_versions(install_root);
+
+    for file in files {
+        let Ok(content) = fs::read_file(&file) else {
+            continue;
+        };
+
+        let Some(requirement) = parse_sdk_requirement(&content) else {
+            continue;
+        };
+
+        if !satisfies(&installed, &requirement) {
+            host_log!(
+                warn,
+                "<path>{}</path> pins .NET SDK <symbol>{}</symbol>, which the installed SDKs do not satisfy ({}). Tasks under that directory will fail until the pinned SDK is installed — set <property>version</property> to a matching value.",
+                file,
+                requirement.version,
+                if installed.is_empty() {
+                    "none installed".to_owned()
+                } else {
+                    installed.join(", ")
+                }
+            );
+        }
+    }
+
+    Ok(())
+}
 
 #[plugin_fn]
 pub fn setup_toolchain(
@@ -52,6 +155,11 @@ pub fn setup_toolchain(
     // install script decides for those (it skips re-installs itself).
     if let Some(version) = exact_version(spec) {
         if into_virtual_path(install_root.join("sdk").join(&version))?.exists() {
+            warn_on_unsatisfied_pins(
+                &input.context.workspace_root,
+                &into_virtual_path(&install_root)?,
+            )?;
+
             return Ok(Json(output));
         }
     }
@@ -120,6 +228,12 @@ pub fn setup_toolchain(
 
     operation.finish(OperationStatus::Passed);
     output.operations.push(operation);
+
+    warn_on_unsatisfied_pins(
+        &input.context.workspace_root,
+        &into_virtual_path(&install_root)?,
+    )?;
+
     // Informational only: for WASM-only toolchains the host currently
     // derives the action status itself and merges just operations/files.
     output.installed = true;

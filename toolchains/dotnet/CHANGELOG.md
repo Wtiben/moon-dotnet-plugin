@@ -12,6 +12,15 @@
   of each project's own files plus every config file up to the workspace root, so an edit to any
   of them re-evaluates rather than serving a stale set.
 
+- A missing SDK now fails the graph build once, with guidance: which `global.json` pins which
+  version, and the three ways out (install it, set `version:`, or point `dotnetRoot` at a
+  satisfying SDK). Previously the batch failure fell back to per-project evaluation, so a
+  232-project workspace produced 233 copies of the dotnet host's output and then a silently
+  empty graph. Detection keys on the host's (non-localized) help URL.
+- `setup_toolchain` warns when the SDKs it installed cannot satisfy a `global.json` pin found in
+  the workspace — e.g. `version: '8.0'` configured while a subtree pins 10.x, which otherwise
+  fails much later, once tasks run.
+
 #### 🐛 Fixes
 
 - MSBuild evaluation and tasks now resolve the **same** SDK. Evaluation runs under the same

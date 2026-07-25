@@ -352,6 +352,39 @@ mod dotnet_toolchain_tier2 {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        async fn unsatisfiable_global_json_pin_fails_with_guidance() {
+            let sandbox = create_moon_sandbox("projects");
+            // No such SDK exists, so the dotnet host refuses to run MSBuild
+            // at all — every project would fail identically.
+            sandbox.create_file(
+                "global.json",
+                r#"{"sdk":{"version":"99.0.100","rollForward":"disable"}}"#,
+            );
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let mut input = projects_input();
+            input.toolchain_config = json!({ "inferDependencies": true });
+            input.context = plugin.create_context();
+
+            // The wrapper unwraps, so call through the plugin to inspect the
+            // error itself.
+            let error = plugin
+                .plugin
+                .call_func_with::<_, _, ExtendProjectGraphOutput>("extend_project_graph", input)
+                .await
+                .expect_err("an unsatisfiable SDK pin must fail the graph build")
+                .to_string();
+
+            // Names the pin, where it came from, and the ways out — instead
+            // of one cryptic host dump per project and an empty graph.
+            assert!(error.contains("99.0.100"), "{error}");
+            assert!(error.contains("global.json"), "{error}");
+            assert!(error.contains("version"), "{error}");
+            assert!(error.contains("dotnetRoot"), "{error}");
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         async fn broken_project_does_not_abort_graph() {
             let sandbox = create_moon_sandbox("projects");
             sandbox.create_file("core/Core.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><broken");

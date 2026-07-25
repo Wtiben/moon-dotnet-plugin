@@ -324,6 +324,19 @@ pub fn parse_batch_output(stdout: &str) -> AnyResult<BTreeMap<String, MsbuildEva
     Ok(results)
 }
 
+/// Did an invocation fail because the dotnet host could not resolve an SDK
+/// (rather than because a project is broken)?
+///
+/// Matches on the help URL the host prints, which — unlike the surrounding
+/// message text — is not localized. The English phrasing is accepted as a
+/// fallback for hosts that omit the link.
+pub fn is_sdk_resolution_failure(output: &str) -> bool {
+    let lower = output.to_lowercase();
+
+    lower.contains("aka.ms/dotnet/sdk-not-found")
+        || (lower.contains("global.json") && lower.contains("sdk") && lower.contains("not found"))
+}
+
 /// Given the output of a failed batch invocation, find which of the input
 /// projects MSBuild reported errors for. Error lines carry the
 /// locale-invariant `<full path>(line,col): error CODE:` prefix, so a
@@ -727,6 +740,34 @@ mod tests {
         assert!(xml.contains("CustomAfterMicrosoftCommonCrossTargetingTargets=$(MSBuildThisFileDirectory)moon-eval.targets"));
         assert!(xml.contains("BuildInParallel=\"true\""));
         assert!(xml.contains("ContinueOnError=\"WarnAndContinue\""));
+    }
+
+    #[test]
+    fn recognizes_sdk_resolution_failures() {
+        // Real host output (abridged) from a workspace pinning an SDK that
+        // is not installed.
+        let output = "\
+5.0.100 [C:\\Program Files\\dotnet\\sdk]
+      A compatible .NET SDK was not found.
+
+Requested SDK version: 10.0.301
+global.json file: C:\\repo\\src\\backend\\global.json
+
+Learn about SDK resolution:
+https://aka.ms/dotnet/sdk-not-found";
+
+        assert!(is_sdk_resolution_failure(output));
+        // The URL alone is enough, so localized message text still matches.
+        assert!(is_sdk_resolution_failure(
+            "irgendein Fehler\nhttps://aka.ms/dotnet/sdk-not-found"
+        ));
+
+        // A broken project is a different failure class and must not be
+        // reported as a missing SDK.
+        assert!(!is_sdk_resolution_failure(
+            "C:\\repo\\app\\App.csproj(1,41): error MSB4025: The project file could not be loaded."
+        ));
+        assert!(!is_sdk_resolution_failure("error MSB1009: Project file does not exist."));
     }
 
     #[test]

@@ -2,7 +2,8 @@ use crate::config::DotnetToolchainConfig;
 use crate::global_json::{SdkRequirement, parse_sdk_requirement, satisfies};
 use crate::infer_tasks::{InferInputs, infer_tasks};
 use crate::msbuild::{
-    EvalEnv, common_source_prefix, evaluate_project, evaluate_projects_batch, normalize_path_key,
+    EvalEnv, common_source_prefix, evaluate_project, evaluate_projects_batch,
+    is_sdk_resolution_failure, normalize_path_key,
 };
 use crate::nuget_lock::parse_lock_file;
 use extism_pdk::*;
@@ -756,6 +757,31 @@ pub fn extend_project_graph(
     ) {
         Ok(results) => results,
         Err(error) => {
+            let message = error.to_string();
+
+            // A missing SDK dooms every project, so retrying each one only
+            // repeats the host's cryptic output N times and leaves the graph
+            // silently empty. Fail once, with the pin that cannot be served
+            // and the ways to fix it.
+            if is_sdk_resolution_failure(&message) {
+                let pin = find_sdk_requirement(
+                    eval_env.cwd.as_ref().unwrap_or(&input.context.workspace_root),
+                    &input.context.workspace_root,
+                );
+
+                let requirement = match &pin {
+                    Some((file, requirement)) => format!(
+                        "The .NET SDK pinned by <path>{}</path> (<symbol>{}</symbol>) is not available",
+                        file, requirement.version
+                    ),
+                    None => "No usable .NET SDK was found".to_owned(),
+                };
+
+                return Err(plugin_err!(
+                    "{requirement}, so MSBuild evaluation cannot run.\n\nInstall that SDK, set <property>version</property> under <property>dotnet</property> in <file>.moon/toolchains.yml</file> to have moon install it, or point <property>dotnetRoot</property> at an SDK that satisfies the pin.\n\n{message}"
+                ));
+            }
+
             host_log!(
                 warn,
                 "Batched MSBuild evaluation failed; falling back to per-project evaluation: {}",
