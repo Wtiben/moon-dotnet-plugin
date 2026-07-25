@@ -1224,6 +1224,14 @@ mod dotnet_toolchain_tier2 {
         }
     }
 
+    // `get_env_var` in the plugin reads the *real* host process environment, so
+    // an ambient `DOTNET_ROOT` — `actions/setup-dotnet` exports one on every CI
+    // runner — takes precedence and returns before `resolve_dotnet_root` ever
+    // consults the home-dir fallback or `global.json`. Assertions here must
+    // therefore hold in both environments; `assert_ne!` against the sandbox's
+    // own `.home/.dotnet` does, because that path is never the ambient value.
+    // Removing the variable instead would need `unsafe { env::remove_var }`,
+    // which is unsound in these multi-threaded tests.
     mod extend_task_command {
         use super::*;
 
@@ -1270,9 +1278,8 @@ mod dotnet_toolchain_tier2 {
 
             let root = output.env.get("DOTNET_ROOT").expect("DOTNET_ROOT not set");
 
-            // An ambient DOTNET_ROOT (e.g. set by actions/setup-dotnet on CI
-            // runners) legitimately takes precedence over the home-dir
-            // fallback; only assert the fallback value when none is set.
+            // Positive assertion, so it can only check the fallback value when
+            // no ambient DOTNET_ROOT pre-empts it — see the note on this module.
             match std::env::var("DOTNET_ROOT") {
                 Ok(ambient) if !ambient.is_empty() => assert_eq!(root, &ambient),
                 _ => assert!(root.contains(".dotnet")),
@@ -1314,22 +1321,16 @@ mod dotnet_toolchain_tier2 {
                 })
                 .await;
 
-            // An ambient DOTNET_ROOT (actions/setup-dotnet sets one on CI
-            // runners) legitimately wins over the fallback and never reaches
-            // the guard, so only assert when none is set. The satisfaction
-            // rules themselves are unit-tested in `global_json`.
-            match std::env::var("DOTNET_ROOT") {
-                Ok(ambient) if !ambient.is_empty() => {
-                    assert_eq!(output.env.get("DOTNET_ROOT").unwrap(), &ambient);
-                }
-                _ => {
-                    assert!(
-                        !output.env.contains_key("DOTNET_ROOT"),
-                        "an SDK-8-only ~/.dotnet must not be injected for a 10.x pin"
-                    );
-                    assert!(output.paths.is_empty());
-                }
-            }
+            // Holds whether or not an ambient DOTNET_ROOT is set: with one, it
+            // wins and is never the sandbox home; without one, the guard leaves
+            // DOTNET_ROOT unset. Either way the unsatisfying ~/.dotnet must not
+            // be what we inject. The satisfaction rules themselves are
+            // unit-tested in `global_json`.
+            assert_ne!(
+                output.env.get("DOTNET_ROOT").map(String::as_str),
+                sandbox.path().join(".home/.dotnet").to_str(),
+                "an SDK-8-only ~/.dotnet must not be injected for a 10.x pin"
+            );
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -1388,12 +1389,15 @@ mod dotnet_toolchain_tier2 {
                 })
                 .await;
 
-            // The host DOTNET_ROOT env var may leak in from the dev machine;
-            // only assert the cache-dir case when it is not set there.
-            if std::env::var("DOTNET_ROOT").is_err() {
-                assert!(!output.env.contains_key("DOTNET_ROOT"));
-                assert!(output.paths.is_empty());
-            }
+            // Unconditional: an ambient DOTNET_ROOT is never the sandbox home,
+            // so this asserts the cache dir was rejected in both environments.
+            // The previous `if env::var(..).is_err()` guard meant this test
+            // asserted nothing at all on CI.
+            assert_ne!(
+                output.env.get("DOTNET_ROOT").map(String::as_str),
+                sandbox.path().join(".home/.dotnet").to_str(),
+                "a ~/.dotnet with no dotnet executable is a cache dir, not a DOTNET_ROOT"
+            );
         }
     }
 }
