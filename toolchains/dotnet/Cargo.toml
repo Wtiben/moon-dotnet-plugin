@@ -3,9 +3,21 @@ name = "dotnet_toolchain"
 version = "0.2.0"
 edition = "2024"
 description = ".NET toolchain WASM plugin for moon."
+authors = ["Wouter Tiben"]
 license = "MIT"
+# `repository` and `documentation` move to the moonrepo/plugins URLs in the
+# commit that upstreams this crate — until then they must describe this repo,
+# since its release workflow copies them into the published OCI annotations.
 repository = "https://github.com/Wtiben/moon-dotnet-plugin"
+documentation = "https://github.com/Wtiben/moon-dotnet-plugin#readme"
 publish = false
+
+# Every toolchain in moonrepo/plugins carries this: `cargo release` rewrites the
+# CHANGELOG's `## Unreleased` heading to the version being released.
+[package.metadata.release]
+pre-release-replacements = [
+    { file = "./CHANGELOG.md", search = "Unreleased", replace = "{{version}}" },
+]
 
 [lib]
 crate-type = ["cdylib", "lib"]
