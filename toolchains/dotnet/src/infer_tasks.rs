@@ -3,7 +3,7 @@ use crate::msbuild::MsbuildEvaluation;
 use moon_common::Id;
 use moon_config::{
     Input, Output, PartialTaskArgs, PartialTaskConfig, PartialTaskDependency,
-    PartialTaskOptionsConfig, TaskOptionCache, TaskOptionRunInCI,
+    PartialTaskDependencyConfig, PartialTaskOptionsConfig, TaskOptionCache, TaskOptionRunInCI,
 };
 use moon_pdk_api::{AnyResult, anyhow};
 use moon_target::Target;
@@ -130,6 +130,20 @@ fn parse_target(target: &str) -> AnyResult<PartialTaskDependency> {
     Ok(PartialTaskDependency::Target(
         Target::parse(target).map_err(|error| anyhow!("{error}"))?,
     ))
+}
+
+/// Same, but tolerated when the target does not exist. Required for `~:` deps:
+/// moon defaults `optional` to `false` for the `OwnSelf` scope, so a project
+/// that infers `test` or `publish` without `build` — `inferTasks: ['test']`, or
+/// a `build` id claimed by an inherited task file — would fail project-graph
+/// construction outright with `UnknownDepTarget` rather than simply losing the
+/// ordering edge.
+fn parse_optional_target(target: &str) -> AnyResult<PartialTaskDependency> {
+    Ok(PartialTaskDependency::Object(PartialTaskDependencyConfig {
+        target: Some(Target::parse(target).map_err(|error| anyhow!("{error}"))?),
+        optional: Some(true),
+        ..Default::default()
+    }))
 }
 
 /// Inputs for cacheable tasks: everything in the project EXCEPT the
@@ -294,7 +308,7 @@ pub fn infer_tasks(
             Id::raw("test"),
             PartialTaskConfig {
                 command: Some(test_command),
-                deps: Some(vec![parse_target("~:build")?]),
+                deps: Some(vec![parse_optional_target("~:build")?]),
                 description: Some("Runs tests against the built assemblies. (inferred)".into()),
                 inputs: Some(hash_inputs.clone()),
                 ..Default::default()
@@ -328,7 +342,7 @@ pub fn infer_tasks(
 
         let mut task = PartialTaskConfig {
             command: Some(publish_command),
-            deps: Some(vec![parse_target("~:build")?]),
+            deps: Some(vec![parse_optional_target("~:build")?]),
             description: Some("Publishes the built application. (inferred)".into()),
             inputs: Some(hash_inputs),
             ..Default::default()
@@ -572,6 +586,37 @@ mod tests {
 
         let tasks = infer(&eval, &InferTasksSetting::Enabled(false), &[]);
         assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn the_self_build_dep_is_optional() {
+        // moon defaults `~:` deps to mandatory, so selecting only `test` or
+        // only `publish` — no `build` task to depend on — would fail
+        // project-graph construction with `UnknownDepTarget` if these were
+        // plain targets.
+        // A project is either a test project or an executable — `is_exe`
+        // excludes `is_test` — so each dep needs its own evaluation.
+        let cases = [
+            ("test", evaluation(&[("IsTestProject", "true")])),
+            (
+                "publish",
+                evaluation(&[
+                    ("OutputType", "Exe"),
+                    ("TargetFramework", "net8.0"),
+                    ("PublishDir", "bin\\Debug\\net8.0\\publish\\"),
+                ]),
+            ),
+        ];
+
+        for (id, eval) in cases {
+            let tasks = infer(&eval, &InferTasksSetting::Only(vec![id.into()]), &[]);
+
+            assert_eq!(
+                tasks[&Id::raw(id)].deps.as_deref(),
+                Some(&[parse_optional_target("~:build").unwrap()][..]),
+                "`{id}` must depend on an optional `~:build`"
+            );
+        }
     }
 
     #[test]

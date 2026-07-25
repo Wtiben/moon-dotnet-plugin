@@ -26,6 +26,11 @@
 
 #### 🐛 Fixes
 
+- The inferred `test` and `publish` tasks now mark their `~:build` dependency **optional**. moon
+  defaults `~:` deps to mandatory, so `inferTasks: ['test']` (or `['publish']`) produced a task
+  depending on a `build` that was never inferred, and project-graph construction failed outright
+  with `Invalid dependency ~:build ... target does not exist` instead of simply losing the ordering
+  edge.
 - A missing `dotnet` executable no longer fails the project graph. `extend_project_graph` now warns
   and contributes nothing, matching `parse_manifest` and `hash_task_contents`. The graph is built
   before the action pipeline runs, so a `version:` configured for the toolchain to install is not
