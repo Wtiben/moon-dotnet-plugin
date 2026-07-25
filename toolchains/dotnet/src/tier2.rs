@@ -1,6 +1,6 @@
 use crate::config::DotnetToolchainConfig;
 use crate::global_json::{SdkRequirement, parse_sdk_requirement, satisfies};
-use crate::infer_tasks::{InferInputs, infer_tasks};
+use crate::infer_tasks::{InferInputs, infer_tasks, reportable_conflicts};
 use crate::msbuild::{
     EvalEnv, common_source_prefix, evaluate_project, evaluate_projects_batch,
     is_sdk_resolution_failure, normalize_path_key,
@@ -235,10 +235,11 @@ fn collect_yaml_files(dir: &VirtualPath, out: &mut Vec<VirtualPath>) {
 }
 
 /// Task ids defined in inherited task files that can apply to dotnet
-/// projects. Inference must never contribute one of these ids — see
+/// projects, mapped to the file that defines each one (for reporting).
+/// Inference must never contribute one of these ids — see
 /// `applies_to_dotnet` for why.
-fn load_inherited_task_ids(workspace_root: &VirtualPath) -> BTreeSet<String> {
-    let mut ids = BTreeSet::new();
+fn load_inherited_task_ids(workspace_root: &VirtualPath) -> BTreeMap<String, String> {
+    let mut ids = BTreeMap::new();
     let mut files = vec![workspace_root.join(".moon").join("tasks.yml")];
 
     collect_yaml_files(&workspace_root.join(".moon").join("tasks"), &mut files);
@@ -250,9 +251,13 @@ fn load_inherited_task_ids(workspace_root: &VirtualPath) -> BTreeSet<String> {
 
         // An unparseable file is moon's problem to report; there is nothing
         // for inference to yield to.
-        if let Ok(parsed) = yaml::read_file::<InheritedTasksFile>(file.any_path()) {
-            if applies_to_dotnet(parsed.inherited_by.as_ref()) {
-                ids.extend(parsed.tasks.into_keys());
+        if let Ok(parsed) = yaml::read_file::<InheritedTasksFile>(file.any_path())
+            && applies_to_dotnet(parsed.inherited_by.as_ref())
+        {
+            let label = file.to_string();
+
+            for id in parsed.tasks.into_keys() {
+                ids.entry(id).or_insert_with(|| label.clone());
             }
         }
     }
@@ -796,7 +801,20 @@ pub fn extend_project_graph(
     // semantics — a garbage command). Project-level moon.yml needs no such
     // handling: moon guarantees local tasks win over plugin tasks.
     let reserved_task_ids = if infer_tasks_enabled {
-        load_inherited_task_ids(&input.context.workspace_root)
+        let reserved = load_inherited_task_ids(&input.context.workspace_root);
+
+        // Report once per workspace, not once per project: without this,
+        // "no project has a build task" has no visible cause.
+        for (task_id, file) in reportable_conflicts(&reserved, &config.infer_tasks) {
+            host_log!(
+                warn,
+                "Not inferring the <id>{}</id> task: <path>{}</path> already defines it, and moon merges inherited and plugin tasks by appending args — which would produce a broken command. Rename or remove that task to let inference contribute, or list only the tasks you want in <property>inferTasks</property>.",
+                task_id,
+                file
+            );
+        }
+
+        reserved.into_keys().collect()
     } else {
         BTreeSet::new()
     };

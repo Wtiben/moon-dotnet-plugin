@@ -1,4 +1,4 @@
-use crate::config::InferTasksSetting;
+use crate::config::{INFERABLE_TASKS, InferTasksSetting};
 use crate::msbuild::MsbuildEvaluation;
 use moon_common::Id;
 use moon_config::{
@@ -165,6 +165,26 @@ fn apply_outputs(task: &mut PartialTaskConfig, outputs: Option<String>) -> AnyRe
     }
 
     Ok(())
+}
+
+/// Task ids that inference would have contributed but had to yield to an
+/// inherited task file, paired with the file that claimed each one.
+///
+/// Yielding is silent otherwise, which turns "why does no project have a
+/// build task?" into a dead end — worth one report per workspace.
+pub fn reportable_conflicts<'a>(
+    reserved: &'a BTreeMap<String, String>,
+    setting: &InferTasksSetting,
+) -> Vec<(&'a str, &'a str)> {
+    INFERABLE_TASKS
+        .iter()
+        .filter(|task| setting.includes(task))
+        .filter_map(|task| {
+            reserved
+                .get_key_value(*task)
+                .map(|(id, file)| (id.as_str(), file.as_str()))
+        })
+        .collect()
 }
 
 /// Infer `build` / `test` / `run` / `publish` tasks from one project's
@@ -553,6 +573,38 @@ mod tests {
             command_line(&tasks[&Id::raw("run")]),
             "dotnet run --project App.csproj"
         );
+    }
+
+    #[test]
+    fn reports_only_conflicts_that_actually_suppress_inference() {
+        let reserved: BTreeMap<String, String> = [
+            ("build", "/workspace/.moon/tasks/dotnet.yml"),
+            ("publish", "/workspace/.moon/tasks.yml"),
+            // Not inferable, so its presence is unremarkable.
+            ("lint", "/workspace/.moon/tasks/all.yml"),
+        ]
+        .iter()
+        .map(|(id, file)| (id.to_string(), file.to_string()))
+        .collect();
+
+        assert_eq!(
+            reportable_conflicts(&reserved, &InferTasksSetting::default()),
+            vec![
+                ("build", "/workspace/.moon/tasks/dotnet.yml"),
+                ("publish", "/workspace/.moon/tasks.yml"),
+            ]
+        );
+
+        // A task the user did not ask us to infer is not a conflict.
+        assert_eq!(
+            reportable_conflicts(&reserved, &InferTasksSetting::Only(vec!["publish".into()])),
+            vec![("publish", "/workspace/.moon/tasks.yml")]
+        );
+
+        assert!(
+            reportable_conflicts(&reserved, &InferTasksSetting::Enabled(false)).is_empty()
+        );
+        assert!(reportable_conflicts(&BTreeMap::new(), &InferTasksSetting::default()).is_empty());
     }
 
     #[test]

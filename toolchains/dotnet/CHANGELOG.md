@@ -20,6 +20,9 @@
 - `setup_toolchain` warns when the SDKs it installed cannot satisfy a `global.json` pin found in
   the workspace — e.g. `version: '8.0'` configured while a subtree pins 10.x, which otherwise
   fails much later, once tasks run.
+- Task inference now reports the task ids it yielded to an inherited task file, naming the file
+  and how to change it. Yielding was silent, so a workspace whose `.moon/tasks/*.yml` defines
+  `build` simply had no inferred build tasks and no visible reason why.
 
 #### 🐛 Fixes
 

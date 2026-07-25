@@ -162,7 +162,8 @@ Design notes:
   (`.moon/tasks.yml`, `.moon/tasks/**/*.yml`) that can apply to dotnet projects are
   never inferred at all — moon would otherwise merge the two into a broken command.
   Files explicitly scoped to other toolchains/languages via `inheritedBy` don't
-  suppress anything.
+  suppress anything. Whenever an inherited file does suppress a task, the plugin logs
+  which id and which file, so missing tasks are never a mystery.
 - Directories with several project files get the file passed explicitly
   (`dotnet build App.csproj ...`).
 
