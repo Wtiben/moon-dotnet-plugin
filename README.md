@@ -10,9 +10,10 @@ Provides:
   config schema, Docker metadata & scaffold globs.
 - **Tier 2** — moon project-graph dependencies inferred from **real MSBuild evaluation**
   of `ProjectReference` items (`dotnet msbuild -getProperty/-getItem`, .NET SDK 8+),
-  `dotnet restore` dependency installs (with automatic `--locked-mode`), task-content
-  hashing from lock files or the evaluated package set, `packages.lock.json` parsing,
-  Docker pruning of `bin`/`obj`, and `DOTNET_ROOT` injection into task environments.
+  project aliases from `AssemblyName`, `dotnet restore` dependency installs (with
+  automatic `--locked-mode`), local tool restore, task-content hashing from lock files
+  or the evaluated package set, `packages.lock.json` and manifest parsing, Docker
+  pruning of `bin`/`obj`, and `DOTNET_ROOT` injection into task environments.
 - **Tier 3** — .NET SDK installation driven by `version:` in `.moon/toolchains.yml`,
   via the official `dotnet-install` scripts into a shared `DOTNET_ROOT`.
 
@@ -76,10 +77,25 @@ Requires a .NET SDK 8+ (`-getProperty`/`-getItem` JSON output needs MSBuild 17.8
 ## Scope cuts (v1)
 
 SDK-style projects only (no legacy csproj), `dotnet` CLI only, no NuGet workloads,
-no global tools, outer-build evaluation only for multi-targeted projects. Custom
-`<Import>`s outside the `Directory.Build.*` conventions affect the *evaluated package
-set* (captured in hashes) but their file contents are not themselves hashed — build
-behavior changes in such files won't invalidate caches. See FOLLOWUPS.md.
+no global tools (local tool manifests *are* restored). Custom `<Import>`s outside the
+`Directory.Build.*` conventions affect the *evaluated package set* (captured in
+hashes) but their file contents are not themselves hashed — build behavior changes in
+such files won't invalidate caches.
+
+Multi-targeted projects (`<TargetFrameworks>`) are evaluated as the **outer
+(cross-targeting) build**, where `$(TargetFramework)` is empty. References and
+packages gated on a specific TFM are therefore invisible to dependency inference and
+hashing; unconditional ones resolve normally. This is pinned by the `matrix` test
+fixture.
+
+The plugin also deliberately does not implement `sync_project` (writing
+`<ProjectReference>` entries into `.csproj` from moon's graph): the project files are
+the source of truth here and inference flows one way, out of MSBuild. Nor does
+`prune_docker` clear NuGet's global package cache (`~/.nuget/packages`) — moon runs a
+production install *after* pruning, so clearing it would force a full re-download;
+use `dotnet nuget locals all --clear` in your Dockerfile if you want that.
+
+See FOLLOWUPS.md.
 
 ## SDK installation (tier 3)
 
@@ -130,10 +146,12 @@ lock file drifts from the declared dependencies. Renamed lock files following th
 `packages.<project>.lock.json` convention (via `NuGetLockFilePath`) are recognized
 too.
 
-Note: moon's install-dependencies action fingerprints only the lock file (this
-toolchain registers no manifest file names), so editing a `.csproj` alone does not
-re-trigger the install action until the lock file changes too — another reason to
-keep lock files committed and current.
+Note: moon's install-dependencies action fingerprints the lock file plus the one
+fixed-name .NET manifest, `Directory.Packages.props` (project files have variable
+names, which moon's literal-name manifest matching cannot express). So a Central
+Package Management version bump re-triggers installs, but editing a `.csproj` alone
+does not until the lock file changes too — another reason to keep lock files
+committed and current.
 
 ## Docker
 
@@ -146,6 +164,26 @@ keep lock files committed and current.
 - `prune_docker` removes `bin`/`obj` directories in the dependencies root and
   each focused project. NuGet's user-level cache is not touched in v1.
 - Add `.moon/cache` (and ideally `.moon/docker`) to `.dockerignore`.
+
+## Project aliases
+
+Each project gains its evaluated `AssemblyName` as a moon **alias**, so tasks and
+commands can address it by its .NET name as well as its moon id — e.g.
+`moon run MyCompany.App:build` for a project whose `moon.yml` id is `app`. Aliases
+also drive `moon docker prune`'s per-toolchain package targeting. moon silently
+ignores an alias that collides with another project's id or alias (and an alias
+equal to its own id is a no-op), so mixed workspaces cannot break on collisions.
+Set `inheritAliases: false` under `dotnet:` to opt out.
+
+## Local dotnet tools
+
+When a tool manifest (`.config/dotnet-tools.json`) is found, `dotnet tool restore`
+runs during moon's setup-environment action, before dependency installs. The manifest
+is searched for from the dependencies root **upward** to the workspace root, matching
+how the dotnet CLI resolves it — tool manifests conventionally sit at the repository
+root, which is not necessarily a dependencies root (any project directory holding a
+lock file becomes one). The restore is keyed on the manifest's content, so editing it
+re-runs the restore and repeat runs skip it. Global tools remain out of scope.
 
 ## Task inference (`inferTasks`)
 

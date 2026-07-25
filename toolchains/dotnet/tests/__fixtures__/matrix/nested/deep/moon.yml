@@ -1,0 +1,4 @@
+language: 'csharp'
+
+toolchains:
+  default: 'dotnet'
