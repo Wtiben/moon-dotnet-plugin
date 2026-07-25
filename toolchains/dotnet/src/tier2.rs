@@ -1,12 +1,15 @@
 use crate::config::DotnetToolchainConfig;
+use crate::global_json::{SdkRequirement, parse_sdk_requirement, satisfies};
 use crate::infer_tasks::{InferInputs, infer_tasks};
-use crate::msbuild::{evaluate_project, evaluate_projects_batch, normalize_path_key};
+use crate::msbuild::{
+    EvalEnv, common_source_prefix, evaluate_project, evaluate_projects_batch, normalize_path_key,
+};
 use crate::nuget_lock::parse_lock_file;
 use extism_pdk::*;
 use moon_config::{DependencyScope, UnresolvedVersionSpec, VersionSpec};
 use moon_pdk::{
-    HostLogInput, HostLogTarget, command_exists, get_host_env_var, get_host_environment,
-    host_log, is_project_toolchain_enabled, parse_toolchain_config, plugin_err,
+    HostLogInput, HostLogTarget, command_exists, get_host_env_var, get_host_environment, host_log,
+    into_virtual_path, is_project_toolchain_enabled, parse_toolchain_config, plugin_err,
 };
 use moon_pdk_api::*;
 use starbase_utils::{fs, yaml};
@@ -269,10 +272,77 @@ fn content_digest(content: &str) -> String {
     format!("{hash:016x}")
 }
 
-/// Resolve the DOTNET_ROOT to inject into task environments.
-/// Order: explicit config > existing host env var > `~/.dotnet` when it
-/// contains an actual SDK layout (the proto dotnet plugin installs there).
-fn resolve_dotnet_root(config: &DotnetToolchainConfig) -> AnyResult<Option<String>> {
+/// SDK versions laid out under a `DOTNET_ROOT` (`<root>/sdk/<version>`).
+fn installed_sdk_versions(root: &VirtualPath) -> Vec<String> {
+    let mut versions = vec![];
+
+    if let Ok(entries) = std::fs::read_dir(root.join("sdk").any_path()) {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && let Ok(name) = entry.file_name().into_string()
+            {
+                versions.push(name);
+            }
+        }
+    }
+
+    versions
+}
+
+/// Nearest `global.json` SDK pin, searching from `start` up to (and
+/// including) the workspace root — the same direction the dotnet host
+/// searches from its working directory. Returns the file path (for messages)
+/// and the parsed pin.
+fn find_sdk_requirement(
+    start: &VirtualPath,
+    workspace_root: &VirtualPath,
+) -> Option<(String, SdkRequirement)> {
+    let mut current = Some(start.to_owned());
+
+    while let Some(dir) = current {
+        let file = dir.join("global.json");
+
+        if file.exists()
+            && let Ok(content) = fs::read_file(&file)
+            && let Some(requirement) = parse_sdk_requirement(&content)
+        {
+            return Some((file.to_string(), requirement));
+        }
+
+        if dir.any_path() == workspace_root.any_path() {
+            break;
+        }
+
+        current = dir.parent();
+    }
+
+    None
+}
+
+/// Where to look for a `global.json` SDK pin when validating the `~/.dotnet`
+/// fallback: from `start` up to (and including) `workspace_root`.
+struct SdkPinScope<'a> {
+    start: &'a VirtualPath,
+    workspace_root: &'a VirtualPath,
+}
+
+/// Resolve the DOTNET_ROOT for task environments *and* MSBuild evaluation —
+/// both must agree, or the graph gets evaluated by one SDK while tasks run
+/// under another.
+///
+/// Order: explicit config > existing host env var > `~/.dotnet` when it holds
+/// a real SDK layout (where the proto dotnet plugin installs).
+///
+/// The `~/.dotnet` fallback is guarded: a leftover install there (a stale
+/// proto experiment, say) would otherwise be injected over a perfectly good
+/// system SDK, making every task fail against a `global.json` pin it cannot
+/// satisfy. When a `dotnet` exists on PATH and the fallback cannot serve the
+/// workspace's pin, the fallback is skipped so PATH wins. Explicit
+/// configuration is never second-guessed.
+fn resolve_dotnet_root(
+    config: &DotnetToolchainConfig,
+    scope: Option<SdkPinScope<'_>>,
+) -> AnyResult<Option<String>> {
     if let Some(root) = &config.dotnet_root {
         return Ok(Some(root.clone()));
     }
@@ -288,20 +358,98 @@ fn resolve_dotnet_root(config: &DotnetToolchainConfig) -> AnyResult<Option<Strin
 
     // `~/.dotnet` doubles as the dotnet CLI's user-level cache directory, so
     // mere existence is not enough — require the `dotnet` host executable,
-    // which a real SDK install (e.g. via the proto dotnet plugin) provides.
+    // which a real SDK install provides.
     let exe = if env.os.is_windows() {
         "dotnet.exe"
     } else {
         "dotnet"
     };
 
-    if candidate.join(exe).exists() {
-        if let Some(real) = candidate.real_path() {
-            return Ok(Some(real.to_string_lossy().to_string()));
+    if !candidate.join(exe).exists() {
+        return Ok(None);
+    }
+
+    if let Some(scope) = scope
+        && command_exists(&env, "dotnet")
+        && let Some((file, requirement)) =
+            find_sdk_requirement(scope.start, scope.workspace_root)
+    {
+        let installed = installed_sdk_versions(&candidate);
+
+        if !satisfies(&installed, &requirement) {
+            host_log!(
+                warn,
+                "Ignoring the <path>~/.dotnet</path> fallback for DOTNET_ROOT: it has no SDK satisfying <symbol>{}</symbol> from <path>{}</path> (found: {}). Using the <symbol>dotnet</symbol> on PATH instead — set <property>dotnetRoot</property> to override.",
+                requirement.version,
+                file,
+                if installed.is_empty() {
+                    "none".to_owned()
+                } else {
+                    installed.join(", ")
+                }
+            );
+
+            return Ok(None);
         }
     }
 
+    if let Some(real) = candidate.real_path() {
+        let root = real.to_string_lossy().to_string();
+
+        host_log!(
+            debug,
+            "Using the <path>~/.dotnet</path> fallback as DOTNET_ROOT: <path>{}</path>",
+            root
+        );
+
+        return Ok(Some(root));
+    }
+
     Ok(None)
+}
+
+/// Build the MSBuild evaluation environment: the same DOTNET_ROOT tasks get,
+/// plus an explicit working directory (`global.json` resolves from there).
+fn build_eval_env(
+    config: &DotnetToolchainConfig,
+    cwd: VirtualPath,
+    workspace_root: &VirtualPath,
+) -> AnyResult<EvalEnv> {
+    let dotnet_root = resolve_dotnet_root(
+        config,
+        Some(SdkPinScope {
+            start: &cwd,
+            workspace_root,
+        }),
+    )?;
+
+    // Point at the muxer inside the root, but only when its existence can be
+    // confirmed — a host path must be virtualized before wasm can stat it,
+    // and roots outside the plugin's readable paths cannot be checked at all.
+    // Guessing would turn a working evaluation into "command not found", so
+    // unverifiable roots keep using the `dotnet` on PATH, as before.
+    let dotnet_exe = dotnet_root.as_ref().and_then(|root| {
+        let env = get_host_environment().ok()?;
+        let exe = if env.os.is_windows() {
+            "dotnet.exe"
+        } else {
+            "dotnet"
+        };
+        let real = std::path::PathBuf::from(root).join(exe);
+
+        into_virtual_path(&real)
+            .ok()?
+            .exists()
+            // The host converts a command containing a separator back from
+            // its virtual form, so pass the real path.
+            .then(|| real.to_string_lossy().to_string())
+    });
+
+    Ok(EvalEnv {
+        dotnet_root,
+        dotnet_exe,
+        cwd: Some(cwd),
+    })
 }
 
 #[plugin_fn]
@@ -311,7 +459,15 @@ pub fn extend_task_command(
     let config = parse_toolchain_config::<DotnetToolchainConfig>(input.toolchain_config)?;
     let mut output = ExtendTaskCommandOutput::default();
 
-    if let Some(root) = resolve_dotnet_root(&config)? {
+    // Tasks run in their project directory, so that is where the dotnet host
+    // resolves `global.json` from — validate the fallback against that pin.
+    let project_root = input.context.get_project_root(&input.project);
+    let scope = SdkPinScope {
+        start: &project_root,
+        workspace_root: &input.context.workspace_root,
+    };
+
+    if let Some(root) = resolve_dotnet_root(&config, Some(scope))? {
         output.env.insert("DOTNET_ROOT".into(), root.clone());
         output.paths.push(root.into());
         // Opt out of telemetry noise in CI task runs.
@@ -447,6 +603,28 @@ pub fn extend_project_graph(
         ));
     }
 
+    // Evaluate from the deepest directory containing every .NET project, so
+    // a `global.json` in that subtree governs evaluation exactly as it
+    // governs the tasks that run inside it. Without an explicit working
+    // directory the dotnet host would resolve `global.json` from wherever
+    // moon happened to be invoked, so the same workspace could evaluate
+    // under different SDKs run to run.
+    let sources = input
+        .project_sources
+        .iter()
+        .filter(|(id, _)| project_files.contains_key(*id))
+        .map(|(_, source)| source.as_str())
+        .collect::<Vec<_>>();
+
+    let eval_prefix = common_source_prefix(&sources);
+    let eval_dir = if eval_prefix.is_empty() {
+        input.context.workspace_root.clone()
+    } else {
+        input.context.workspace_root.join(&eval_prefix)
+    };
+
+    let eval_env = build_eval_env(&config, eval_dir, &input.context.workspace_root)?;
+
     // Pass 2: evaluate every project with a single batched MSBuild
     // invocation (one process, parallel in-process evaluation) — the
     // dotnet/MSBuild startup cost dominates per-project evaluation, so this
@@ -460,8 +638,11 @@ pub fn extend_project_graph(
         .filter_map(|file| file.real_path())
         .collect::<Vec<_>>();
 
-    let mut batch = match evaluate_projects_batch(&input.context.workspace_root, &all_project_paths)
-    {
+    let mut batch = match evaluate_projects_batch(
+        &input.context.workspace_root,
+        &all_project_paths,
+        &eval_env,
+    ) {
         Ok(results) => results,
         Err(error) => {
             host_log!(
@@ -505,7 +686,14 @@ pub fn extend_project_graph(
             let evaluation = if let Some(evaluation) = batch.remove(&batch_key) {
                 evaluation
             } else {
-                match evaluate_project(&real_path) {
+                // Fall back with the project's own directory as the working
+                // directory — the same `global.json` its tasks will resolve.
+                let single_env = EvalEnv {
+                    cwd: file.parent().or_else(|| eval_env.cwd.clone()),
+                    ..eval_env.clone()
+                };
+
+                match evaluate_project(&real_path, &single_env) {
                     Ok(evaluation) => evaluation,
                     Err(error) => {
                         // One broken project must not take down graph
@@ -723,7 +911,21 @@ pub fn parse_manifest(
         return Ok(Json(output));
     }
 
-    let evaluation = match evaluate_project(&real_path) {
+    let manifest_dir = input
+        .path
+        .parent()
+        .unwrap_or_else(|| input.context.workspace_root.clone());
+
+    // `parse_manifest` carries no toolchain config, so an explicit
+    // `dotnetRoot` cannot be honored here; the env var and the guarded
+    // `~/.dotnet` fallback still apply.
+    let eval_env = build_eval_env(
+        &DotnetToolchainConfig::default(),
+        manifest_dir,
+        &input.context.workspace_root,
+    )?;
+
+    let evaluation = match evaluate_project(&real_path, &eval_env) {
         Ok(evaluation) => evaluation,
         Err(error) => {
             host_log!(
@@ -922,12 +1124,15 @@ pub fn hash_task_contents(
         let env = get_host_environment()?;
 
         if command_exists(&env, "dotnet") {
+            let config = parse_toolchain_config::<DotnetToolchainConfig>(input.toolchain_config)?;
+            let eval_env = build_eval_env(&config, project_root.clone(), workspace_root)?;
+
             for file in find_project_files(&project_root) {
                 let Some(real_path) = file.real_path() else {
                     continue;
                 };
 
-                match evaluate_project(&real_path) {
+                match evaluate_project(&real_path, &eval_env) {
                     Ok(evaluation) => {
                         packages.extend(evaluation.package_references());
                     }

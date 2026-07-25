@@ -99,6 +99,70 @@ pub fn normalize_path_key(path: &str) -> String {
     path.replace('\\', "/").to_lowercase()
 }
 
+/// Host environment applied to every MSBuild invocation, so graph evaluation
+/// resolves the same SDK that tasks will run under.
+#[derive(Clone, Debug, Default)]
+pub struct EvalEnv {
+    /// `DOTNET_ROOT` to evaluate under, when one was resolved.
+    pub dotnet_root: Option<String>,
+
+    /// Absolute path to the `dotnet` muxer inside `dotnet_root`, when its
+    /// existence could be confirmed.
+    ///
+    /// This is what actually selects the SDK: the host resolves a bare
+    /// command name from its own `PATH` (warpgate `host.rs` — a command
+    /// containing a separator is treated as a path, anything else goes
+    /// through `find_command_on_path`), and the muxer locates SDKs relative
+    /// to its own location rather than from `DOTNET_ROOT`. Verified
+    /// empirically: setting only `DOTNET_ROOT`/`paths` left evaluation on the
+    /// `PATH` SDK.
+    pub dotnet_exe: Option<String>,
+
+    /// Directory to run MSBuild in. The dotnet host resolves `global.json`
+    /// from the **current directory** — not from the project path (verified
+    /// empirically) — so this is what decides which SDK evaluates the
+    /// projects. Leaving it unset would inherit moon's own working directory,
+    /// making evaluation depend on where the user happened to run moon from.
+    pub cwd: Option<moon_pdk_api::VirtualPath>,
+}
+
+/// Deepest directory that contains all of the given workspace-relative
+/// project sources, as a workspace-relative path (empty when they share no
+/// prefix, i.e. the workspace root itself).
+///
+/// Used as the evaluation working directory: in a repo whose .NET projects
+/// live under one subtree, this is the subtree root, so a `global.json` there
+/// applies to evaluation exactly as it applies to the tasks that run inside
+/// it.
+pub fn common_source_prefix(sources: &[&str]) -> String {
+    let mut common: Option<Vec<&str>> = None;
+
+    for source in sources {
+        let parts = source
+            .split(['/', '\\'])
+            .filter(|part| !part.is_empty() && *part != ".")
+            .collect::<Vec<_>>();
+
+        common = Some(match common {
+            None => parts,
+            Some(existing) => existing
+                .into_iter()
+                .zip(parts)
+                // Sources come from moon config, which is case-sensitive
+                // about the paths it reports; compare them verbatim.
+                .take_while(|(left, right)| left == right)
+                .map(|(left, _)| left)
+                .collect(),
+        });
+
+        if common.as_ref().is_some_and(|parts| parts.is_empty()) {
+            break;
+        }
+    }
+
+    common.unwrap_or_default().join("/")
+}
+
 /// Escape a literal path for use inside an MSBuild `Include` attribute:
 /// MSBuild's own special characters (property/item expansion, list
 /// separators, globs) via `%XX` escapes, then XML attribute characters.
@@ -292,6 +356,32 @@ pub fn detect_failed_projects(output: &str, project_paths: &[String]) -> Vec<Str
         .collect()
 }
 
+/// Apply the resolved SDK environment to an MSBuild invocation.
+#[cfg(feature = "wasm")]
+fn with_eval_env(
+    mut input: moon_pdk_api::ExecCommandInput,
+    env: &EvalEnv,
+) -> moon_pdk_api::ExecCommandInput {
+    if let Some(root) = &env.dotnet_root {
+        input.env.insert("DOTNET_ROOT".into(), root.clone());
+        input
+            .paths
+            .push(moon_pdk_api::VirtualPath::Real(root.into()));
+    }
+
+    // Only an explicit executable path redirects which SDK evaluates; see
+    // `EvalEnv::dotnet_exe`.
+    if let Some(exe) = &env.dotnet_exe {
+        input.command = exe.clone();
+    }
+
+    if let Some(cwd) = &env.cwd {
+        input.cwd = Some(cwd.clone());
+    }
+
+    input
+}
+
 /// Evaluate many projects with a single MSBuild invocation, paying the
 /// dotnet/MSBuild startup cost (which dominates per-project evaluation)
 /// once instead of once per project, and evaluating in parallel. The
@@ -300,6 +390,7 @@ pub fn detect_failed_projects(output: &str, project_paths: &[String]) -> Vec<Str
 pub fn evaluate_projects_batch(
     workspace_root: &moon_pdk_api::VirtualPath,
     project_real_paths: &[std::path::PathBuf],
+    eval_env: &EvalEnv,
 ) -> AnyResult<BTreeMap<String, MsbuildEvaluation>> {
     use moon_pdk::exec;
     use moon_pdk_api::{ExecCommandInput, anyhow};
@@ -324,20 +415,23 @@ pub fn evaluate_projects_batch(
     let run = |batch_paths: &[String]| {
         fs::write_file(&traversal, traversal_project_xml(batch_paths))?;
 
-        exec(ExecCommandInput::pipe(
-            "dotnet",
-            [
-                "msbuild",
-                traversal_arg.as_str(),
-                "-nologo",
-                // Parallel in-process worker nodes, but never leave them
-                // alive after the invocation (node reuse lingers ~15 min,
-                // which is hostile to CI containers).
-                "-maxCpuCount",
-                "-nodeReuse:false",
-                "-t:MoonCollect",
-                "-getItem:MoonEval",
-            ],
+        exec(with_eval_env(
+            ExecCommandInput::pipe(
+                "dotnet",
+                [
+                    "msbuild",
+                    traversal_arg.as_str(),
+                    "-nologo",
+                    // Parallel in-process worker nodes, but never leave them
+                    // alive after the invocation (node reuse lingers ~15 min,
+                    // which is hostile to CI containers).
+                    "-maxCpuCount",
+                    "-nodeReuse:false",
+                    "-t:MoonCollect",
+                    "-getItem:MoonEval",
+                ],
+            ),
+            eval_env,
         ))
     };
 
@@ -384,21 +478,27 @@ pub fn evaluate_projects_batch(
 
 /// Run a real MSBuild evaluation for a project file (host-real path).
 #[cfg(feature = "wasm")]
-pub fn evaluate_project(csproj_real_path: &std::path::Path) -> AnyResult<MsbuildEvaluation> {
+pub fn evaluate_project(
+    csproj_real_path: &std::path::Path,
+    eval_env: &EvalEnv,
+) -> AnyResult<MsbuildEvaluation> {
     use moon_pdk::exec;
     use moon_pdk_api::{ExecCommandInput, anyhow};
 
     let path_arg = csproj_real_path.to_string_lossy().to_string();
 
-    let output = exec(ExecCommandInput::pipe(
-        "dotnet",
-        [
-            "msbuild",
-            path_arg.as_str(),
-            "-nologo",
-            &format!("-getProperty:{EVAL_PROPERTIES}"),
-            &format!("-getItem:{EVAL_ITEMS}"),
-        ],
+    let output = exec(with_eval_env(
+        ExecCommandInput::pipe(
+            "dotnet",
+            [
+                "msbuild",
+                path_arg.as_str(),
+                "-nologo",
+                &format!("-getProperty:{EVAL_PROPERTIES}"),
+                &format!("-getItem:{EVAL_ITEMS}"),
+            ],
+        ),
+        eval_env,
     ))?;
 
     if output.exit_code != 0 {
@@ -563,6 +663,33 @@ mod tests {
     #[test]
     fn batch_output_without_items_is_empty() {
         assert!(parse_batch_output("{}").unwrap().is_empty());
+    }
+
+    #[test]
+    fn finds_the_common_source_prefix() {
+        // The common shape: every .NET project under one subtree, so a
+        // global.json there governs evaluation just as it governs tasks.
+        assert_eq!(
+            common_source_prefix(&[
+                "src/backend/Attachment/Attachment.Service",
+                "src/backend/Common/Common.Business",
+                "src/backend/Billing/Billing.Service",
+            ]),
+            "src/backend"
+        );
+
+        // Mixed trees share nothing -> the workspace root.
+        assert_eq!(
+            common_source_prefix(&["src/backend/App", "tools/Generator"]),
+            ""
+        );
+
+        // A single project yields its own directory; separators normalize.
+        assert_eq!(common_source_prefix(&["apps\\api"]), "apps/api");
+        assert_eq!(common_source_prefix(&["."]), "");
+        assert_eq!(common_source_prefix(&[]), "");
+        // No accidental partial-component matches.
+        assert_eq!(common_source_prefix(&["src/app", "src/app-other"]), "src");
     }
 
     #[test]

@@ -1078,6 +1078,88 @@ mod dotnet_toolchain_tier2 {
         }
 
         #[tokio::test(flavor = "multi_thread")]
+        async fn skips_home_fallback_that_cannot_satisfy_global_json() {
+            let sandbox = create_moon_sandbox("projects");
+
+            // A leftover ~/.dotnet holding only SDK 8 — the exact shape that
+            // made every task fail against a 10.x pin in a real repo.
+            let exe = if cfg!(windows) { "dotnet.exe" } else { "dotnet" };
+            sandbox.create_file(format!(".home/.dotnet/{exe}").as_str(), "");
+            sandbox.create_file(".home/.dotnet/sdk/8.0.423/marker", "");
+            sandbox.create_file(
+                "global.json",
+                r#"{"sdk":{"version":"10.0.301","rollForward":"latestMajor"}}"#,
+            );
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .extend_task_command(ExtendTaskCommandInput {
+                    project: moon_pdk_api::ProjectFragment {
+                        id: Id::raw("app"),
+                        source: "app".into(),
+                        toolchains: vec![Id::raw("dotnet")],
+                        ..Default::default()
+                    },
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            // An ambient DOTNET_ROOT (actions/setup-dotnet sets one on CI
+            // runners) legitimately wins over the fallback and never reaches
+            // the guard, so only assert when none is set. The satisfaction
+            // rules themselves are unit-tested in `global_json`.
+            match std::env::var("DOTNET_ROOT") {
+                Ok(ambient) if !ambient.is_empty() => {
+                    assert_eq!(output.env.get("DOTNET_ROOT").unwrap(), &ambient);
+                }
+                _ => {
+                    assert!(
+                        output.env.get("DOTNET_ROOT").is_none(),
+                        "an SDK-8-only ~/.dotnet must not be injected for a 10.x pin"
+                    );
+                    assert!(output.paths.is_empty());
+                }
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn uses_home_fallback_that_satisfies_global_json() {
+            let sandbox = create_moon_sandbox("projects");
+
+            let exe = if cfg!(windows) { "dotnet.exe" } else { "dotnet" };
+            sandbox.create_file(format!(".home/.dotnet/{exe}").as_str(), "");
+            sandbox.create_file(".home/.dotnet/sdk/10.0.301/marker", "");
+            sandbox.create_file(
+                "global.json",
+                r#"{"sdk":{"version":"10.0.301","rollForward":"latestMajor"}}"#,
+            );
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .extend_task_command(ExtendTaskCommandInput {
+                    project: moon_pdk_api::ProjectFragment {
+                        id: Id::raw("app"),
+                        source: "app".into(),
+                        toolchains: vec![Id::raw("dotnet")],
+                        ..Default::default()
+                    },
+                    toolchain_config: json!({}),
+                    ..Default::default()
+                })
+                .await;
+
+            let root = output.env.get("DOTNET_ROOT").expect("DOTNET_ROOT not set");
+
+            match std::env::var("DOTNET_ROOT") {
+                Ok(ambient) if !ambient.is_empty() => assert_eq!(root, &ambient),
+                _ => assert!(root.contains(".dotnet")),
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
         async fn no_injection_without_any_dotnet_root() {
             let sandbox = create_empty_moon_sandbox();
 

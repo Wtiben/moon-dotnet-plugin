@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+#### 🐛 Fixes
+
+- MSBuild evaluation and tasks now resolve the **same** SDK. Evaluation runs under the same
+  `DOTNET_ROOT` that `extend_task_command` injects (by invoking that root's `dotnet` muxer —
+  `DOTNET_ROOT` alone does not redirect SDK resolution), and from an explicit working directory:
+  the deepest directory containing every .NET project, so a `global.json` in that subtree governs
+  evaluation exactly as it governs the tasks that run there. Previously evaluation used whichever
+  `dotnet` was on `PATH` and resolved `global.json` from wherever moon happened to be invoked.
+- The `~/.dotnet` fallback for `DOTNET_ROOT` is now validated against the workspace's `global.json`
+  SDK pin (`version` + `rollForward`, including `latest*`/`disable` and prerelease rules). A
+  leftover install there — a stale proto experiment, say — is no longer injected over a working
+  system SDK, which previously made every task fail with the dotnet host's "compatible SDK was not
+  found" while graph evaluation still succeeded. Skips and uses of the fallback are both logged.
+
 ## 0.2.0
 
 #### 🚀 Features

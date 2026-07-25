@@ -1,5 +1,6 @@
 pub mod config;
 pub mod dotnet_install;
+pub mod global_json;
 pub mod infer_tasks;
 pub mod msbuild;
 pub mod nuget_lock;
