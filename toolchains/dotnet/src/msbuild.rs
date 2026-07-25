@@ -74,7 +74,9 @@ impl MsbuildEvaluation {
 /// task outputs and input exclusions (they follow redirected output
 /// locations, e.g. .NET 8 `UseArtifactsOutput`). `AssemblyName`/`Version`
 /// feed the project alias and manifest metadata.
-pub const EVAL_PROPERTIES: &str = "TargetFramework,TargetFrameworks,OutputType,IsTestProject,IsPackable,RestorePackagesWithLockFile,BaseOutputPath,BaseIntermediateOutputPath,PublishDir,Configuration,AssemblyName,Version";
+/// `TestingPlatformDotnetTestSupport` opts a single project into
+/// Microsoft.Testing.Platform, which changes the `dotnet test` command line.
+pub const EVAL_PROPERTIES: &str = "TargetFramework,TargetFrameworks,OutputType,IsTestProject,IsPackable,RestorePackagesWithLockFile,BaseOutputPath,BaseIntermediateOutputPath,PublishDir,Configuration,AssemblyName,Version,TestingPlatformDotnetTestSupport";
 
 /// The exact `-getItem` list requested per evaluation. `PackageVersion`
 /// items exist under Central Package Management (declared in

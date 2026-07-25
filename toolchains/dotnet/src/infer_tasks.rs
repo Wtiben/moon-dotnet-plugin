@@ -24,6 +24,12 @@ pub struct InferInputs<'a> {
 
     /// Host-real absolute path of the workspace root.
     pub workspace_dir: &'a str,
+
+    /// Whether the `global.json` governing this project selects
+    /// Microsoft.Testing.Platform for `dotnet test`. A project can also opt
+    /// in on its own via `TestingPlatformDotnetTestSupport`, which is read
+    /// from the evaluation.
+    pub test_platform_runner: bool,
 }
 
 /// Strip `base` (plus one separator) from the start of `value`,
@@ -268,7 +274,24 @@ pub fn infer_tasks(
     }
 
     if is_test && wants("test") {
-        let mut test_command = command("test", file, &["--no-build", "--no-restore"]);
+        // Microsoft.Testing.Platform's `dotnet test` takes the project
+        // through `--project` and rejects a positional path; classic VSTest
+        // mode is the exact opposite and rejects `--project`. Both verified
+        // against SDK 10.0.201, so the flavour has to match the runner.
+        let uses_test_platform = inputs.test_platform_runner
+            || evaluation
+                .property("TestingPlatformDotnetTestSupport")
+                .eq_ignore_ascii_case("true");
+
+        let mut test_command = match file {
+            Some(file) if uses_test_platform => command(
+                "test",
+                None,
+                &["--project", file, "--no-build", "--no-restore"],
+            ),
+            _ => command("test", file, &["--no-build", "--no-restore"]),
+        };
+
         pin_configuration(&mut test_command, configuration);
 
         tasks.insert(
@@ -359,9 +382,19 @@ mod tests {
                 explicit_project_file: None,
                 project_dir: "C:\\work\\repo\\app",
                 workspace_dir: "C:\\work\\repo",
+                test_platform_runner: false,
             },
         )
         .unwrap()
+    }
+
+    fn test_project_evaluation() -> MsbuildEvaluation {
+        let mut eval = evaluation(&[("OutputType", "Exe"), ("TargetFramework", "net10.0")]);
+        eval.items.insert(
+            "PackageReference".into(),
+            vec![serde_json::json!({ "Identity": "Microsoft.NET.Test.Sdk" })],
+        );
+        eval
     }
 
     fn command_line(task: &PartialTaskConfig) -> String {
@@ -561,6 +594,7 @@ mod tests {
                 explicit_project_file: Some("App.csproj"),
                 project_dir: "/repo/app",
                 workspace_dir: "/repo",
+                test_platform_runner: false,
             },
         )
         .unwrap();
@@ -572,6 +606,71 @@ mod tests {
         assert_eq!(
             command_line(&tasks[&Id::raw("run")]),
             "dotnet run --project App.csproj"
+        );
+    }
+
+    #[test]
+    fn test_platform_takes_the_project_through_a_flag() {
+        let eval = test_project_evaluation();
+
+        let infer_with = |runner: bool, file: Option<&str>| {
+            let tasks = infer_tasks(
+                &InferTasksSetting::default(),
+                &BTreeSet::new(),
+                &InferInputs {
+                    evaluation: &eval,
+                    explicit_project_file: file,
+                    project_dir: "/repo/app-tests",
+                    workspace_dir: "/repo",
+                    test_platform_runner: runner,
+                },
+            )
+            .unwrap();
+
+            command_line(&tasks[&Id::raw("test")])
+        };
+
+        // MTP rejects a positional project path...
+        assert_eq!(
+            infer_with(true, Some("App.Tests.csproj")),
+            "dotnet test --project App.Tests.csproj --no-build --no-restore"
+        );
+        // ...while classic VSTest mode rejects `--project`.
+        assert_eq!(
+            infer_with(false, Some("App.Tests.csproj")),
+            "dotnet test App.Tests.csproj --no-build --no-restore"
+        );
+        // With one project file in the directory neither flavour applies:
+        // the command runs in the project directory with no path at all.
+        assert_eq!(infer_with(true, None), "dotnet test --no-build --no-restore");
+        assert_eq!(infer_with(false, None), "dotnet test --no-build --no-restore");
+    }
+
+    #[test]
+    fn project_level_test_platform_opt_in_is_honored() {
+        // A project can select MTP on its own, without a global.json.
+        let mut eval = test_project_evaluation();
+        eval.properties.insert(
+            "TestingPlatformDotnetTestSupport".into(),
+            "true".into(),
+        );
+
+        let tasks = infer_tasks(
+            &InferTasksSetting::default(),
+            &BTreeSet::new(),
+            &InferInputs {
+                evaluation: &eval,
+                explicit_project_file: Some("App.Tests.csproj"),
+                project_dir: "/repo/app-tests",
+                workspace_dir: "/repo",
+                test_platform_runner: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            command_line(&tasks[&Id::raw("test")]),
+            "dotnet test --project App.Tests.csproj --no-build --no-restore"
         );
     }
 

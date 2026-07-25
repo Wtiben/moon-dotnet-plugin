@@ -12,6 +12,13 @@ use serde::Deserialize;
 #[serde(default, rename_all = "camelCase")]
 struct GlobalJsonFile {
     sdk: Option<GlobalJsonSdk>,
+    test: Option<GlobalJsonTest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct GlobalJsonTest {
+    runner: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -128,6 +135,19 @@ pub fn parse_sdk_requirement(content: &str) -> Option<SdkRequirement> {
     })
 }
 
+/// Does this `global.json` select Microsoft.Testing.Platform as the runner
+/// for `dotnet test` (`{"test": {"runner": "Microsoft.Testing.Platform"}}`)?
+///
+/// It changes the `dotnet test` command line, not just the runner: MTP takes
+/// the project through `--project` and rejects a positional path, while
+/// classic VSTest mode is the exact opposite. Verified against SDK 10.0.201.
+pub fn selects_test_platform(content: &str) -> bool {
+    serde_json::from_str::<GlobalJsonFile>(content)
+        .ok()
+        .and_then(|file| file.test?.runner)
+        .is_some_and(|runner| runner.eq_ignore_ascii_case("Microsoft.Testing.Platform"))
+}
+
 /// Could any of these installed SDK versions satisfy the pin?
 ///
 /// Unparseable installed version strings are ignored; an unparseable pin
@@ -214,6 +234,26 @@ mod tests {
         assert_eq!(requirement.version, "10.0.301");
         assert_eq!(requirement.roll_forward, RollForward::Major);
         assert!(requirement.allow_prerelease);
+    }
+
+    #[test]
+    fn detects_the_microsoft_testing_platform_runner() {
+        // Real shape from a production repo.
+        assert!(selects_test_platform(
+            r#"{
+              "sdk": { "version": "10.0.301", "rollForward": "latestMajor" },
+              "test": { "runner": "Microsoft.Testing.Platform" }
+            }"#
+        ));
+        assert!(selects_test_platform(
+            r#"{"test":{"runner":"microsoft.testing.platform"}}"#
+        ));
+
+        assert!(!selects_test_platform(r#"{"test":{"runner":"VSTest"}}"#));
+        assert!(!selects_test_platform(r#"{"test":{}}"#));
+        assert!(!selects_test_platform(r#"{"sdk":{"version":"10.0.301"}}"#));
+        assert!(!selects_test_platform("{}"));
+        assert!(!selects_test_platform("not json"));
     }
 
     #[test]

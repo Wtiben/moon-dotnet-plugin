@@ -133,7 +133,7 @@ dotnet:
 | Task | Inferred for | Command | Cached |
 |---|---|---|---|
 | `build` | every project | `dotnet build --no-restore --no-dependencies -c <cfg>` + `deps: ['^:build']` | ✅ outputs from evaluated `BaseOutputPath` |
-| `test` | `IsTestProject=true` or a `Microsoft.NET.Test.Sdk` reference | `dotnet test --no-build --no-restore -c <cfg>` + `deps: ['~:build']` | ✅ (pass/fail state) |
+| `test` | `IsTestProject=true` or a `Microsoft.NET.Test.Sdk` reference | `dotnet test --no-build --no-restore -c <cfg>` + `deps: ['~:build']` — VSTest and Microsoft.Testing.Platform both supported | ✅ (pass/fail state) |
 | `run` | `Exe`/`WinExe`, non-test | `dotnet run` | never cached, excluded from CI |
 | `publish` | `Exe`/`WinExe`, non-test, single-TFM | `dotnet publish --no-build --no-restore -c <cfg>` + `deps: ['~:build']` | ✅ outputs from evaluated `PublishDir` |
 
@@ -165,7 +165,11 @@ Design notes:
   suppress anything. Whenever an inherited file does suppress a task, the plugin logs
   which id and which file, so missing tasks are never a mystery.
 - Directories with several project files get the file passed explicitly
-  (`dotnet build App.csproj ...`).
+  (`dotnet build App.csproj ...`). For `test` the flavour follows the runner:
+  Microsoft.Testing.Platform takes the project through `--project` and rejects a
+  positional path, while classic VSTest mode rejects `--project`. MTP is detected from
+  `{"test": {"runner": "Microsoft.Testing.Platform"}}` in the governing `global.json`
+  or from a project's own `TestingPlatformDotnetTestSupport`.
 
 Not inferred: `pack`, `watch`, and `clean`; and multi-TFM projects get no `publish`
 task, since `dotnet publish` needs an explicit `-f` there.

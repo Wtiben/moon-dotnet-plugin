@@ -26,6 +26,13 @@
 
 #### 🐛 Fixes
 
+- The inferred `test` task now works under **Microsoft.Testing.Platform**, not just VSTest. When a
+  project directory holds several project files, the task has to name one — and MTP's `dotnet test`
+  takes it through `--project` and rejects a positional path, while classic VSTest mode rejects
+  `--project` (both verified against SDK 10.0.201). The flavour is picked from the governing
+  `global.json` (`{"test": {"runner": "Microsoft.Testing.Platform"}}`) or a project's own
+  `TestingPlatformDotnetTestSupport`. Detection of test projects was already correct: MTP projects
+  still evaluate `IsTestProject=true`.
 - MSBuild evaluation and tasks now resolve the **same** SDK. Evaluation runs under the same
   `DOTNET_ROOT` that `extend_task_command` injects (by invoking that root's `dotnet` muxer —
   `DOTNET_ROOT` alone does not redirect SDK resolution), and from an explicit working directory:

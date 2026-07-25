@@ -1,5 +1,7 @@
 use crate::config::DotnetToolchainConfig;
-use crate::global_json::{SdkRequirement, parse_sdk_requirement, satisfies};
+use crate::global_json::{
+    SdkRequirement, parse_sdk_requirement, satisfies, selects_test_platform,
+};
 use crate::infer_tasks::{InferInputs, infer_tasks, reportable_conflicts};
 use crate::msbuild::{
     EvalEnv, common_source_prefix, evaluate_project, evaluate_projects_batch,
@@ -436,6 +438,32 @@ fn find_sdk_requirement(
     None
 }
 
+/// Does the `global.json` governing this directory select
+/// Microsoft.Testing.Platform for `dotnet test`? The nearest file wins,
+/// whether or not it names a runner — the dotnet host resolves exactly one
+/// `global.json`, it does not merge them.
+fn uses_test_platform_runner(start: &VirtualPath, workspace_root: &VirtualPath) -> bool {
+    let mut current = Some(start.to_owned());
+
+    while let Some(dir) = current {
+        let file = dir.join("global.json");
+
+        if file.exists() {
+            return fs::read_file(&file)
+                .map(|content| selects_test_platform(&content))
+                .unwrap_or(false);
+        }
+
+        if dir.any_path() == workspace_root.any_path() {
+            break;
+        }
+
+        current = dir.parent();
+    }
+
+    false
+}
+
 /// Where to look for a `global.json` SDK pin when validating the `~/.dotnet`
 /// fallback: from `start` up to (and including) `workspace_root`.
 struct SdkPinScope<'a> {
@@ -833,6 +861,17 @@ pub fn extend_project_graph(
         // Package set collected for the task-hashing cache below.
         let mut packages: BTreeMap<String, String> = BTreeMap::new();
 
+        let project_root = input
+            .project_sources
+            .get(id)
+            .map(|source| input.context.workspace_root.join(source));
+
+        // Which `dotnet test` flavour this project's tasks will run under.
+        let test_platform_runner = infer_tasks_enabled
+            && project_root.as_ref().is_some_and(|root| {
+                uses_test_platform_runner(root, &input.context.workspace_root)
+            });
+
         for file in files {
             let Some(real_path) = file.real_path() else {
                 continue;
@@ -945,6 +984,7 @@ pub fn extend_project_graph(
                         explicit_project_file,
                         project_dir: &project_dir,
                         workspace_dir: &workspace_dir,
+                        test_platform_runner,
                     },
                 );
 
@@ -972,11 +1012,6 @@ pub fn extend_project_graph(
 
         // Hand the evaluated package set to task hashing. Projects with a
         // lock file take the lock-file branch there and never need it.
-        let project_root = input
-            .project_sources
-            .get(id)
-            .map(|source| input.context.workspace_root.join(source));
-
         if let Some(project_root) = project_root
             && find_lock_files(&project_root).is_empty()
         {
