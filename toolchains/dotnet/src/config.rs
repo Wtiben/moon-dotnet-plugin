@@ -1,5 +1,5 @@
 use moon_pdk_api::config_struct;
-use schematic::{Config, Schema, SchemaBuilder, Schematic, schema::UnionType};
+use schematic::{Config, Schematic};
 
 /// The task names the plugin can infer.
 pub const INFERABLE_TASKS: &[&str] = &["build", "test", "run", "publish"];
@@ -7,7 +7,7 @@ pub const INFERABLE_TASKS: &[&str] = &["build", "test", "run", "publish"];
 /// Which tasks to infer from evaluated MSBuild properties: a boolean to
 /// enable/disable all of them, or an explicit list of task names
 /// (`build`, `test`, `run`, `publish`) to infer only those.
-#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Schematic, serde::Deserialize, serde::Serialize)]
 #[serde(
     untagged,
     expecting = "expected a boolean or a list of task names (build, test, run, publish)"
@@ -38,19 +38,6 @@ impl InferTasksSetting {
             Self::Enabled(enabled) => *enabled,
             Self::Only(list) => !list.is_empty(),
         }
-    }
-}
-
-impl Schematic for InferTasksSetting {
-    fn schema_name() -> Option<String> {
-        Some("InferTasksSetting".into())
-    }
-
-    fn build_schema(mut schema: SchemaBuilder) -> Schema {
-        schema.union(UnionType::new_any([
-            schema.infer::<bool>(),
-            schema.infer::<Vec<String>>(),
-        ]))
     }
 }
 
@@ -94,6 +81,16 @@ mod tests {
         assert!(json.contains("inferTasks"));
         assert!(json.contains("restoreArgs"));
         assert!(json.contains("dotnetRoot"));
+
+        // `inferTasks` must stay a `bool | string[]` union. The derive produces
+        // this from the untagged enum; asserting the shape means a change to the
+        // enum cannot silently narrow what the setting accepts.
+        assert!(
+            json.contains(
+                r#""operator":"AnyOf","variants_types":[{"ty":{"type":"Boolean"}},{"ty":{"type":"Array","items_type":{"ty":{"type":"String"}}}}]"#
+            ),
+            "inferTasks lost its bool | string[] union: {json}"
+        );
     }
 
     #[test]

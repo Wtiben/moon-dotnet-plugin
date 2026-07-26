@@ -251,7 +251,7 @@ pub fn extend_project_graph(
     // Pass 3: map each project's ProjectReference items onto moon project ids.
     for (id, files) in &project_files {
         let mut project_output = ExtendProjectOutput::default();
-        let mut seen_deps: BTreeMap<Id, ()> = BTreeMap::new();
+        let mut seen_deps: BTreeSet<Id> = BTreeSet::new();
         // Package set collected for the task-hashing cache below. Only cached
         // when every project file was evaluated — a partial set is
         // indistinguishable from a complete one once written, and it would
@@ -346,9 +346,7 @@ pub fn extend_project_graph(
                         continue;
                     };
 
-                    if dep_id != id && !seen_deps.contains_key(dep_id) {
-                        seen_deps.insert(dep_id.to_owned(), ());
-
+                    if dep_id != id && seen_deps.insert(dep_id.to_owned()) {
                         let file_name = std::path::Path::new(&reference)
                             .file_name()
                             .map(|name| name.to_string_lossy().to_string())
@@ -741,33 +739,6 @@ pub fn hash_task_contents(
         "configs": configs,
         "packages": packages,
     }));
-
-    Ok(Json(output))
-}
-
-#[plugin_fn]
-pub fn prune_docker(Json(input): Json<PruneDockerInput>) -> FnResult<Json<PruneDockerOutput>> {
-    let mut output = PruneDockerOutput::default();
-
-    let mut roots = vec![input.root.clone()];
-
-    for project in &input.projects {
-        roots.push(input.context.get_project_root(project));
-    }
-
-    for root in roots {
-        for dir_name in ["bin", "obj"] {
-            let dir = root.join(dir_name);
-
-            if dir.exists() {
-                fs::remove_dir_all(&dir)?;
-
-                if let Some(file) = dir.virtual_path() {
-                    output.changed_files.push(file);
-                }
-            }
-        }
-    }
 
     Ok(Json(output))
 }

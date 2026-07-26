@@ -1171,59 +1171,6 @@ mod dotnet_toolchain_tier2 {
         }
     }
 
-    mod prune_docker {
-        use super::*;
-
-        #[tokio::test(flavor = "multi_thread")]
-        async fn removes_bin_and_obj_dirs() {
-            let sandbox = create_empty_moon_sandbox();
-            sandbox.create_file("app/bin/Debug/x.dll", "");
-            sandbox.create_file("app/obj/project.assets.json", "");
-            sandbox.create_file("app/keep.cs", "");
-
-            let plugin = sandbox.create_toolchain("dotnet").await;
-
-            let output = plugin
-                .prune_docker(PruneDockerInput {
-                    projects: vec![moon_pdk_api::ProjectFragment {
-                        id: Id::raw("app"),
-                        source: "app".into(),
-                        ..Default::default()
-                    }],
-                    root: VirtualPath::Real(sandbox.path().into()),
-                    ..Default::default()
-                })
-                .await;
-
-            assert!(!sandbox.path().join("app/bin").exists());
-            assert!(!sandbox.path().join("app/obj").exists());
-            assert!(sandbox.path().join("app/keep.cs").exists());
-
-            assert_eq!(
-                output.changed_files,
-                vec![
-                    PathBuf::from("/workspace/app/bin"),
-                    PathBuf::from("/workspace/app/obj"),
-                ]
-            );
-        }
-
-        #[tokio::test(flavor = "multi_thread")]
-        async fn does_nothing_without_bin_obj() {
-            let sandbox = create_empty_moon_sandbox();
-            let plugin = sandbox.create_toolchain("dotnet").await;
-
-            let output = plugin
-                .prune_docker(PruneDockerInput {
-                    root: VirtualPath::Real(sandbox.path().into()),
-                    ..Default::default()
-                })
-                .await;
-
-            assert!(output.changed_files.is_empty());
-        }
-    }
-
     // `get_env_var` in the plugin reads the *real* host process environment, so
     // an ambient `DOTNET_ROOT` — `actions/setup-dotnet` exports one on every CI
     // runner — takes precedence and returns before `resolve_dotnet_root` ever

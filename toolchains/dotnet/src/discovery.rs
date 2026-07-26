@@ -62,8 +62,9 @@ pub fn find_project_files(dir: &VirtualPath) -> Vec<VirtualPath> {
 pub fn is_lock_file_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
 
-    lower == "packages.lock.json"
-        || (lower.starts_with("packages.") && lower.ends_with(".lock.json"))
+    // The default name needs no special case: it starts with `packages.` and
+    // ends with `.lock.json` like the renamed variants.
+    lower.starts_with("packages.") && lower.ends_with(".lock.json")
 }
 
 /// List NuGet lock files directly inside a directory (non-recursive), sorted.

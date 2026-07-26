@@ -3,6 +3,7 @@ use extism_pdk::*;
 use moon_config::LanguageType;
 use moon_pdk_api::*;
 use schematic::SchemaBuilder;
+use starbase_utils::fs;
 
 #[plugin_fn]
 pub fn register_toolchain(
@@ -82,4 +83,31 @@ pub fn define_docker_metadata(
             "!**/obj/**".into(),
         ],
     }))
+}
+
+#[plugin_fn]
+pub fn prune_docker(Json(input): Json<PruneDockerInput>) -> FnResult<Json<PruneDockerOutput>> {
+    let mut output = PruneDockerOutput::default();
+
+    let mut roots = vec![input.root.clone()];
+
+    for project in &input.projects {
+        roots.push(input.context.get_project_root(project));
+    }
+
+    for root in roots {
+        for dir_name in ["bin", "obj"] {
+            let dir = root.join(dir_name);
+
+            if dir.exists() {
+                fs::remove_dir_all(&dir)?;
+
+                if let Some(file) = dir.virtual_path() {
+                    output.changed_files.push(file);
+                }
+            }
+        }
+    }
+
+    Ok(Json(output))
 }
