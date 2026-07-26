@@ -58,23 +58,60 @@ fn eval_cache_file(workspace_root: &VirtualPath, project_id: &str) -> VirtualPat
         .join(format!("{safe_id}.json"))
 }
 
+/// Append one file to the digest buffer, framed by its name and byte length.
+///
+/// Framing is load-bearing. Concatenating contents directly means the same bytes
+/// distributed differently across two files produce the same buffer: moving a
+/// `<PackageVersion>` block from the end of `Directory.Build.props` to the start
+/// of `Directory.Packages.props` — adjacent in `find_config_files`' name sort —
+/// is a routine Central Package Management migration, and it left the digest, and
+/// therefore every task hash, unchanged.
+///
+/// The file *name* is used rather than the full path, so the digest stays
+/// independent of where the workspace lives on disk.
+///
+/// An unreadable file contributes an empty body rather than propagating: that
+/// yields a digest that cannot match the one recorded when the file was
+/// readable, i.e. a cache miss, which is the safe direction. Returning an error
+/// instead would break `write_eval_cache`'s best-effort contract.
+fn push_framed(buffer: &mut String, file: &VirtualPath) {
+    let content = fs::read_file(file).unwrap_or_default();
+    let name = file
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_default();
+
+    buffer.push_str(&name);
+    buffer.push(':');
+    buffer.push_str(&content.len().to_string());
+    buffer.push(':');
+    buffer.push_str(&content);
+}
+
 /// Digest of everything that can change a project's evaluated package set:
 /// its project files, plus every config file from the project directory up to
-/// the workspace root. Effects of custom `<Import>`s outside the
-/// `Directory.Build.*` conventions are not captured — the same caveat that
-/// already applies to task hashing itself.
+/// the workspace root.
+///
+/// Two things are deliberately *not* captured. Custom `<Import>`s outside the
+/// `Directory.Build.*` conventions — the same caveat that already applies to
+/// task hashing itself. And the identity of the SDK that produced the set, so
+/// switching `dotnetRoot` or upgrading the system SDK reuses the old answer
+/// until some file changes. Including it would mean resolving the SDK root
+/// before the cache *read* in `hash_task_contents`, and any asymmetry between
+/// the read and write keys turns the cache into a permanent miss — which is the
+/// per-project-evaluation cost this cache exists to avoid.
 fn eval_cache_digest(project_root: &VirtualPath, workspace_root: &VirtualPath) -> String {
     let mut buffer = String::new();
 
     for file in find_project_files(project_root) {
-        buffer.push_str(&fs::read_file(&file).unwrap_or_default());
+        push_framed(&mut buffer, &file);
     }
 
     let mut current = Some(project_root.to_owned());
 
     while let Some(dir) = current {
         for file in find_config_files(&dir) {
-            buffer.push_str(&fs::read_file(&file).unwrap_or_default());
+            push_framed(&mut buffer, &file);
         }
 
         if dir.any_path() == workspace_root.any_path() {
@@ -132,4 +169,39 @@ pub fn read_eval_cache(
     let entry: EvalCacheEntry = serde_json::from_str(&fs::read_file(&file).ok()?).ok()?;
 
     (entry.digest == eval_cache_digest(project_root, workspace_root)).then_some(entry.packages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use starbase_sandbox::create_empty_sandbox;
+
+    #[test]
+    fn framing_distinguishes_content_moved_between_config_files() {
+        // The collision being guarded against: these two distributions of the
+        // same bytes are indistinguishable once concatenated, and
+        // `find_config_files` sorts these two file names adjacently.
+        assert_eq!(
+            content_digest(&format!("{}{}", "<A/><B/>", "")),
+            content_digest(&format!("{}{}", "<A/>", "<B/>")),
+        );
+
+        let sandbox = create_empty_sandbox();
+        let root = VirtualPath::Real(sandbox.path().into());
+
+        sandbox.create_file("Directory.Build.props", "<A/><B/>");
+        sandbox.create_file("Directory.Packages.props", "");
+
+        let before = eval_cache_digest(&root, &root);
+
+        // A routine CPM migration: move the declaration to the other file.
+        sandbox.create_file("Directory.Build.props", "<A/>");
+        sandbox.create_file("Directory.Packages.props", "<B/>");
+
+        assert_ne!(
+            before,
+            eval_cache_digest(&root, &root),
+            "moving a declaration between config files must change the digest"
+        );
+    }
 }

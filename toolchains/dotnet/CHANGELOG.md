@@ -26,6 +26,11 @@
 
 #### 🐞 Fixes
 
+- The evaluated-package-set cache digest now frames each file by name and byte length instead of
+  concatenating contents. Without framing, the same bytes distributed differently across two files
+  produced an identical digest — moving a `<PackageVersion>` declaration from the end of
+  `Directory.Build.props` to the start of `Directory.Packages.props`, a routine Central Package
+  Management migration, left every task hash unchanged. Cached entries invalidate once on upgrade.
 - `global.json` SDK-pin discovery now stops at the nearest file, matching the dotnet host, which
   resolves exactly one `global.json` and neither merges them nor keeps searching. A nearer file
   declaring no `sdk.version` previously let an ancestor's pin apply, so the `~/.dotnet` fallback
