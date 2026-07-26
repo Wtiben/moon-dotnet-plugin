@@ -24,8 +24,21 @@
   and how to change it. Yielding was silent, so a workspace whose `.moon/tasks/*.yml` defines
   `build` simply had no inferred build tasks and no visible reason why.
 
+#### 💥 Breaking
+
+- `extend_task_command` no longer injects `DOTNET_CLI_TELEMETRY_OPTOUT`. It was only set when a
+  `DOTNET_ROOT` was resolved, so it never applied to the common case of a system SDK on `PATH`; no
+  other moon toolchain injects vendor environment variables; and it does not suppress the "Welcome
+  to .NET" first-run banner that its comment claimed to silence (`DOTNET_NOLOGO` does). Set either
+  in a task's `env` if you want them. `DOTNET_ROOT` and `PATH` are still injected.
+
 #### 🐞 Fixes
 
+- A `ProjectReference` that has to be resolved through the workspace-relative suffix index now takes
+  the **longest** matching suffix instead of the first in sort order. With projects at both `lib` and
+  `src/lib` holding an `App.csproj`, a reference to `src/lib/App.csproj` matched both and the
+  shorter `/lib/...` won — a dependency edge pointing at the wrong project. Only reachable when the
+  exact real-path lookup misses, i.e. Windows 8.3 short names.
 - The evaluated-package-set cache digest now frames each file by name and byte length instead of
   concatenating contents. Without framing, the same bytes distributed differently across two files
   produced an identical digest — moving a `<PackageVersion>` declaration from the end of

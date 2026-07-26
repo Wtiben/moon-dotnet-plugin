@@ -1195,11 +1195,14 @@ mod dotnet_toolchain_tier2 {
                 .await;
 
             assert_eq!(output.env.get("DOTNET_ROOT").unwrap(), "/custom/dotnet");
-            assert_eq!(output.env.get("DOTNET_CLI_TELEMETRY_OPTOUT").unwrap(), "1");
             assert_eq!(
                 output.paths,
                 vec![std::path::PathBuf::from("/custom/dotnet")]
             );
+
+            // DOTNET_ROOT is the only variable injected; vendor environment
+            // variables belong in a task's own `env`.
+            assert_eq!(output.env.len(), 1);
         }
 
         #[tokio::test(flavor = "multi_thread")]

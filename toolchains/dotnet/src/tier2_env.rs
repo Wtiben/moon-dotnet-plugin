@@ -234,13 +234,16 @@ pub fn extend_task_command(
         workspace_root: &input.context.workspace_root,
     };
 
+    // Deliberately only DOTNET_ROOT and PATH. No upstream toolchain injects
+    // vendor environment variables users did not ask for, and the
+    // `DOTNET_CLI_TELEMETRY_OPTOUT` that used to be set here was set *inside*
+    // this branch — so it never applied in the common case of a system SDK on
+    // PATH with no DOTNET_ROOT. It also does not suppress the "Welcome to .NET"
+    // first-run banner, which is what `DOTNET_NOLOGO` controls. Both belong in a
+    // task's own `env`, where they are visible.
     if let Some(root) = resolve_dotnet_root(&config, Some(scope))? {
         output.env.insert("DOTNET_ROOT".into(), root.clone());
         output.paths.push(root.into());
-        // Opt out of telemetry noise in CI task runs.
-        output
-            .env
-            .insert("DOTNET_CLI_TELEMETRY_OPTOUT".into(), "1".into());
     }
 
     Ok(Json(output))

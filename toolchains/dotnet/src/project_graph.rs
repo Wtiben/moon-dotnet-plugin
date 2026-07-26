@@ -93,7 +93,21 @@ fn build_project_indexes(input: &ExtendProjectGraphInput) -> ProjectIndexes {
 }
 
 /// Resolve a `ProjectReference` path to the moon project that owns it: exact
-/// real-path match first, then the unique workspace-relative suffix.
+/// real-path match first, then the **longest** matching workspace-relative
+/// suffix.
+///
+/// Longest, not first. One key can end with several indexed suffixes: with
+/// sources `lib` and `src/lib` both holding an `App.csproj`, a reference to
+/// `/ws/src/lib/App.csproj` ends with both `/lib/app.csproj` and
+/// `/src/lib/app.csproj`. Taking the first match in `BTreeMap` order returned
+/// the lexicographically smaller `/lib/...`, i.e. a dependency edge pointing at
+/// the wrong project — the worst failure mode here, since the graph is then
+/// silently wrong rather than merely incomplete.
+///
+/// There is no tie to break: two suffixes of equal length that are both
+/// suffixes of the same key are the same string, and the index holds each key
+/// once. Genuinely ambiguous suffixes are already recorded as `None` when the
+/// index is built.
 fn resolve_reference<'index>(
     indexes: &'index ProjectIndexes,
     reference: &str,
@@ -104,7 +118,8 @@ fn resolve_reference<'index>(
         indexes
             .by_suffix
             .iter()
-            .find(|(suffix, id)| id.is_some() && key.ends_with(suffix.as_str()))
+            .filter(|(suffix, id)| id.is_some() && key.ends_with(suffix.as_str()))
+            .max_by_key(|(suffix, _)| suffix.len())
             .and_then(|(_, id)| id.as_ref())
     })
 }
