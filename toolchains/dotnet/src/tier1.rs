@@ -66,6 +66,10 @@ pub fn define_docker_metadata(
     Json(_): Json<DefineDockerMetadataInput>,
 ) -> FnResult<Json<DefineDockerMetadataOutput>> {
     Ok(Json(DefineDockerMetadataOutput {
+        // Intentionally not derived from the configured `version`: doing so
+        // would mean reading toolchain config here to pick an image tag, which
+        // is a product decision rather than a default. `version` is honoured
+        // where it matters — tier 3 installs exactly that SDK.
         default_image: Some("mcr.microsoft.com/dotnet/sdk:latest".into()),
         scaffold_globs: vec![
             "**/*.{csproj,fsproj,vbproj}".into(),

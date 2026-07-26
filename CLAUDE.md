@@ -88,6 +88,14 @@ directory is exactly `CHANGELOG.md` + `Cargo.toml` + `src/` + `tests/`, and the
 user-facing documentation surface is doc comments on `config.rs` (which become
 the JSON schema) plus `config_url`/`docs_url`.
 
+One pre-submission check this repo cannot run: a default-features (host `cdylib`)
+build on `x86_64-pc-windows-msvc`. Our CI only builds `--no-default-features` on
+windows, and the `rustflags` workaround in `.cargo/config.toml` is
+windows-**gnu**-specific — so the host `cdylib` path is unexercised on MSVC, which
+is what upstream's windows runners use. Expected to pass (`toolchains/go` and
+`toolchains/rust` ship the same `crate-type` and are built there), but worth
+confirming on a machine with the MSVC toolchain before opening the PR.
+
 Expect a maintainer to question a v1.0 from outside the project. The only
 third-party precedent, `toolchains/ruby`, onboarded at `0.1.0` behind an
 `unstable_ruby` config key.

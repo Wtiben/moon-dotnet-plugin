@@ -81,6 +81,12 @@ pub const EVAL_PROPERTIES: &str = "TargetFramework,TargetFrameworks,OutputType,I
 /// The exact `-getItem` list requested per evaluation. `PackageVersion`
 /// items exist under Central Package Management (declared in
 /// `Directory.Packages.props`) and are empty otherwise.
+///
+/// Only `ProjectReference` and `PackageReference` come back from *batched*
+/// evaluation — the injected target flattens those two into item metadata.
+/// `PackageVersion` is therefore only ever populated on the per-project path,
+/// which is where it is needed: `parse_manifest` evaluates a
+/// `Directory.Packages.props` singly.
 pub const EVAL_ITEMS: &str = "ProjectReference,PackageReference,PackageVersion";
 
 /// Parse the stdout of an MSBuild `-get*` invocation. MSBuild may print stray
@@ -427,6 +433,15 @@ pub fn evaluate_projects_batch(
     use moon_pdk_api::{ExecCommandInput, anyhow};
     use starbase_utils::fs;
 
+    // Known constraint: both scratch files use fixed names here, so two moon
+    // processes building a graph in the same checkout at the same time can have
+    // one truncating `traversal.proj` while the other's MSBuild reads it. A
+    // per-invocation subdirectory would fix it, but wasm has no pid, clock or
+    // randomness to name one with, and `MoonContext` offers only `working_dir`
+    // and `workspace_root` — a name derived from the project set would still
+    // collide for the identical batch. The failure is a malformed traversal
+    // project, which surfaces as a batch failure and falls back to per-project
+    // evaluation, so it degrades rather than corrupting results.
     let dir = workspace_root
         .join(".moon")
         .join("cache")
