@@ -16,11 +16,39 @@ use moon_pdk::{
     into_virtual_path, parse_toolchain_config,
 };
 use moon_pdk_api::*;
-use starbase_utils::fs;
+use starbase_utils::{fs, yaml};
 
 #[host_fn]
 extern "ExtismHost" {
     fn host_log(input: Json<HostLogInput>);
+}
+
+/// Has moon been told to install a .NET SDK itself, via `version:` under
+/// `dotnet` in `.moon/toolchains.yml`?
+///
+/// That is a moon-level toolchain setting, not one of ours, so it never reaches
+/// the plugin through `toolchain_config` — `setup_toolchain` receives it as
+/// `configured_version`, but the project graph is built before any of that runs.
+/// Reading the file is the only way to know at graph-build time, and it decides
+/// whether an unresolvable SDK is a terminal misconfiguration or simply an SDK
+/// that has not been installed yet.
+pub fn sdk_install_configured(workspace_root: &VirtualPath) -> bool {
+    let file = workspace_root.join(".moon").join("toolchains.yml");
+
+    if !file.exists() {
+        return false;
+    }
+
+    // Untyped: `version` may be a string (`'8.0'`), a bare YAML float (`8.0`) or
+    // an alias (`lts`), and only its presence matters here.
+    yaml::read_file::<serde_json::Value>(file.any_path())
+        .ok()
+        .and_then(|root| {
+            root.get("dotnet")
+                .and_then(|section| section.get("version"))
+                .cloned()
+        })
+        .is_some_and(|version| !version.is_null())
 }
 
 /// Nearest `global.json` SDK pin, searching from `start` up to (and

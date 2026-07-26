@@ -13,7 +13,9 @@ use crate::msbuild::{
     EvalEnv, MsbuildEvaluation, common_source_prefix, evaluate_project, evaluate_projects_batch,
     is_sdk_resolution_failure, normalize_path_key,
 };
-use crate::tier2_env::{build_eval_env, find_sdk_requirement, uses_test_platform_runner};
+use crate::tier2_env::{
+    build_eval_env, find_sdk_requirement, sdk_install_configured, uses_test_platform_runner,
+};
 use extism_pdk::*;
 use moon_config::DependencyScope;
 use moon_pdk::{
@@ -158,10 +160,19 @@ fn batch_eval_env(
 /// and seconds on large workspaces.
 ///
 /// A recoverable batch failure yields an empty map: each project then falls back
-/// to its own evaluation, keeping the batch purely an optimization. An
-/// unresolvable SDK is *not* recoverable — it dooms every project, so retrying
-/// each one only repeats the host's cryptic output N times and leaves the graph
-/// silently empty. That fails once, naming the pin and the ways out.
+/// to its own evaluation, keeping the batch purely an optimization.
+///
+/// An unresolvable SDK is different — it dooms every project, so falling back
+/// would only repeat the host's cryptic output once per project and still leave
+/// the graph empty. It is reported once, naming the pin and the ways out, and
+/// whether that report is fatal depends on whether anything is going to fix it:
+///
+/// - No `version:` configured: nothing will install the missing SDK, so this is a
+///   terminal misconfiguration and the graph build fails with the guidance.
+/// - `version:` configured: tier 3 installs that SDK later in the same run — the
+///   project graph is built before the action pipeline starts, so failing here
+///   would deadlock the very bootstrap the setting exists for. Warns instead and
+///   contributes nothing, the same way a missing `dotnet` does.
 fn run_batch_evaluation(
     input: &ExtendProjectGraphInput,
     indexes: &ProjectIndexes,
@@ -195,6 +206,15 @@ fn run_batch_evaluation(
                     ),
                     None => "No usable .NET SDK was found".to_owned(),
                 };
+
+                if sdk_install_configured(&input.context.workspace_root) {
+                    host_log!(
+                        warn,
+                        "{requirement} yet, so .NET project graph evaluation is being skipped — no dependency edges or inferred tasks will be contributed on this run. moon installs the SDK configured by <property>version</property> later in this run; re-run afterwards to pick them up."
+                    );
+
+                    return Ok(BTreeMap::new());
+                }
 
                 return Err(plugin_err!(
                     "{requirement}, so MSBuild evaluation cannot run.\n\nInstall that SDK, set <property>version</property> under <property>dotnet</property> in <file>.moon/toolchains.yml</file> to have moon install it, or point <property>dotnetRoot</property> at an SDK that satisfies the pin.\n\n{message}"

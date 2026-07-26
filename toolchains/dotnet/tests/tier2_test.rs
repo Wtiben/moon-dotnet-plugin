@@ -1,3 +1,14 @@
+//! Most of this file requires a .NET SDK (8+) on `PATH`.
+//!
+//! `exec_command` is not mocked in the plugin sandbox — warpgate's host function
+//! spawns a real process — so `extend_project_graph`, `parse_manifest` and
+//! `hash_task_contents` all shell out to `dotnet msbuild` and evaluate the
+//! fixtures for real. `-getProperty`/`-getItem` JSON output is what needs SDK 8+.
+//! Without one, those tests fail rather than skip.
+//!
+//! `locate_dependencies_root`, `install_dependencies`, `parse_lock` and
+//! `extend_task_command` are pure and need no SDK.
+
 use moon_config::DependencyScope;
 use moon_pdk_api::*;
 use moon_pdk_test_utils::{create_empty_moon_sandbox, create_moon_sandbox};
@@ -443,6 +454,34 @@ mod dotnet_toolchain_tier2 {
             assert!(error.contains("global.json"), "{error}");
             assert!(error.contains("version"), "{error}");
             assert!(error.contains("dotnetRoot"), "{error}");
+        }
+
+        #[tokio::test(flavor = "multi_thread")]
+        async fn unsatisfiable_pin_degrades_when_moon_installs_the_sdk() {
+            let sandbox = create_moon_sandbox("projects");
+            sandbox.create_file(
+                "global.json",
+                r#"{"sdk":{"version":"99.0.100","rollForward":"disable"}}"#,
+            );
+
+            // Same unsatisfiable pin, but moon has been told to install an SDK.
+            // The project graph is built before the action pipeline runs, so
+            // failing here would deadlock the bootstrap this setting exists for.
+            sandbox.create_file(".moon/toolchains.yml", "dotnet:\n  version: '8.0'\n");
+
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let mut input = projects_input();
+            input.toolchain_config = json!({ "inferDependencies": true });
+            input.context = plugin.create_context();
+
+            let output = plugin
+                .plugin
+                .call_func_with::<_, _, ExtendProjectGraphOutput>("extend_project_graph", input)
+                .await
+                .expect("a pending SDK install must not fail the graph build");
+
+            assert!(output.extended_projects.is_empty());
         }
 
         #[tokio::test(flavor = "multi_thread")]

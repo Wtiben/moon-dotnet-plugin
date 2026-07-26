@@ -20,6 +20,10 @@
 - `setup_toolchain` warns when the SDKs it installed cannot satisfy a `global.json` pin found in
   the workspace — e.g. `version: '8.0'` configured while a subtree pins 10.x, which otherwise
   fails much later, once tasks run.
+- The `dotnet` toolchain settings now carry full documentation, which is what moon renders into the
+  JSON schema — so an editor with `$schema` on `.moon/toolchains.yml` shows the actual inference
+  rules, the resolution order behind `dotnetRoot`, and that `--locked-mode` is added to
+  `restoreArgs` automatically, instead of a one-line summary.
 - Task inference now reports the task ids it yielded to an inherited task file, naming the file
   and how to change it. Yielding was silent, so a workspace whose `.moon/tasks/*.yml` defines
   `build` simply had no inferred build tasks and no visible reason why.
@@ -34,6 +38,12 @@
 
 #### 🐞 Fixes
 
+- An unresolvable `global.json` SDK pin no longer fails the project graph when `version:` is
+  configured for moon to install an SDK. The graph is built before the action pipeline runs, so
+  failing there deadlocked the very bootstrap that setting exists for — a system SDK 8 plus a
+  subtree pinning 10.x plus `version: '10.0'` could never get past the first command. It now warns
+  and contributes nothing for that run. Without `version:` configured nothing will install the
+  missing SDK, so that case still fails with the same guidance as before.
 - A `ProjectReference` that has to be resolved through the workspace-relative suffix index now takes
   the **longest** matching suffix instead of the first in sort order. With projects at both `lib` and
   `src/lib` holding an `App.csproj`, a reference to `src/lib/App.csproj` matched both and the

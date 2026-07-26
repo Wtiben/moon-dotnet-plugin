@@ -45,25 +45,81 @@ config_struct!(
     /// Configures and enables the .NET toolchain.
     #[derive(Config)]
     pub struct DotnetToolchainConfig {
-        /// Infer moon project dependencies from MSBuild `ProjectReference` items
-        /// (runs a real MSBuild evaluation per project).
+        /// Infer moon project dependencies from MSBuild `ProjectReference`
+        /// items, so `moon` knows the real build order without any `dependsOn`
+        /// declarations.
+        ///
+        /// This runs a real MSBuild evaluation, which is what makes it see
+        /// references added by `Directory.Build.targets` and conditional
+        /// `ProjectReference`s — not just what a project file lists literally.
+        /// Every project in the workspace is evaluated in a single batched
+        /// invocation. A reference outside the moon workspace is skipped.
+        ///
+        /// Defaults to `true`.
         #[setting(default = true)]
         pub infer_dependencies: bool,
 
-        /// Infer `build`, `test`, `run`, and `publish` tasks from evaluated
-        /// MSBuild properties (OutputType, IsTestProject, output paths).
-        /// `true`/`false` toggles all of them; a list of task names infers
-        /// only those. Task ids already defined in inherited task files
-        /// (`.moon/tasks*`) or a project's `moon.yml` are never overridden.
+        /// Infer `build`, `test`, `run` and `publish` tasks from each project's
+        /// evaluated MSBuild properties.
+        ///
+        /// `true` infers all four, `false` infers none, and a list infers only
+        /// the named ones — `['build', 'test']`. Unrecognised names in the list
+        /// are ignored rather than rejected. Being workspace-level, one line
+        /// here covers every project; turning inference off never requires
+        /// per-project overrides.
+        ///
+        /// What gets inferred:
+        ///
+        /// - `build` for every project, with `deps: ['^:build']` and
+        ///   `--no-dependencies`, so moon orchestrates and caches the graph
+        ///   per project rather than delegating that to MSBuild.
+        /// - `test` for a project with `IsTestProject=true` or a
+        ///   `Microsoft.NET.Test.Sdk` reference. Both VSTest and
+        ///   Microsoft.Testing.Platform are supported; the command shape follows
+        ///   whichever the governing `global.json` selects.
+        /// - `run` for `Exe`/`WinExe`, never cached and excluded from CI.
+        /// - `publish` for single-target-framework `Exe`/`WinExe`. Multi-TFM
+        ///   projects get none, since `dotnet publish` needs an explicit `-f`.
+        ///
+        /// Never inferred: `pack`, `watch`, `clean`, and `restore` — moon models
+        /// restore as the install-dependencies action instead, which is why the
+        /// inferred commands all pass `--no-restore`.
+        ///
+        /// Your own tasks always win. A task of the same id in a project's
+        /// `moon.yml` replaces the inferred one outright, and an id defined by an
+        /// inherited task file (`.moon/tasks.yml`, `.moon/tasks/**/*.yml`) that
+        /// can apply to dotnet projects is not inferred at all — moon would
+        /// otherwise merge the two into a broken command. Every such suppression
+        /// is logged with the id and the file that claimed it.
+        ///
+        /// Inferred commands pin the evaluated `Configuration` with `-c`, because
+        /// `dotnet publish` defaults to Release on .NET 8+ while `build` defaults
+        /// to Debug, and `--no-build` needs them to agree. Task outputs come from
+        /// the evaluated `BaseOutputPath`/`PublishDir`, so redirected output
+        /// locations cache correctly; a path resolving outside the workspace
+        /// makes the task run uncached rather than cache the wrong directory.
+        ///
+        /// Defaults to `true`.
         pub infer_tasks: InferTasksSetting,
 
-        /// Additional arguments appended to `dotnet restore` during
-        /// dependency installation.
+        /// Additional arguments appended to `dotnet restore`, which moon runs as
+        /// its install-dependencies action rather than as a task.
+        ///
+        /// `--locked-mode` is added automatically when a `packages.lock.json` (or
+        /// a `packages.<project>.lock.json`) is found, so it does not need to be
+        /// passed here.
         pub restore_args: Vec<String>,
 
-        /// Explicit DOTNET_ROOT to inject into task environments. When unset,
-        /// falls back to an existing DOTNET_ROOT env var, then `~/.dotnet`
-        /// if that directory exists (matching the proto dotnet plugin layout).
+        /// Explicit `DOTNET_ROOT`, used both for task environments and for the
+        /// MSBuild evaluation behind dependency and task inference — the two must
+        /// agree, or the graph gets evaluated by one SDK while tasks run under
+        /// another.
+        ///
+        /// When unset, resolution falls back to an existing `DOTNET_ROOT`
+        /// environment variable, then to `~/.dotnet` when it holds a `dotnet`
+        /// executable *and* an SDK satisfying the workspace's `global.json` pin
+        /// (a leftover install there is otherwise skipped in favour of the
+        /// `dotnet` on `PATH`). Set explicitly, it is never second-guessed.
         pub dotnet_root: Option<String>,
     }
 );
