@@ -13,9 +13,8 @@ env:
   NEXTEST_RETRIES: 2
 
 jobs:
-  # The gates the official plugins repo runs on every job, via its root
-  # `format` and `lint` moon tasks. Kept as a separate ubuntu-only job: both
-  # are OS-independent, so paying for them three times buys nothing.
+  # Formatting and lint. Kept as a separate ubuntu-only job: both gates are
+  # OS-independent, so paying for them three times buys nothing.
   checks:
     name: Checks
     runs-on: ubuntu-latest
@@ -44,9 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # The sandbox tests spawn a real `dotnet` process for MSBuild evaluation;
-      # -getProperty/-getItem JSON output requires SDK 8+. The official plugins
-      # repo does not provision .NET, so merging upstream needs this step added
-      # to its workflow.
+      # -getProperty/-getItem JSON output requires SDK 8+.
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
@@ -54,9 +51,8 @@ jobs:
         with:
           bins: cargo-nextest
           targets: wasm32-wasip1
-      # Release, not debug: `find_wasm_file` prefers `release/` over `debug/`
-      # and the official repo's `test` task depends on a `--release` build, so
-      # this is the wasm the suite is meant to exercise — and the one
-      # `release.yml` publishes, `lto` and `panic = "abort"` included.
+      # Release, not debug: `find_wasm_file` prefers `release/` over `debug/`, so
+      # this is the wasm the suite actually loads — and the one `release.yml`
+      # publishes, `lto` and `panic = "abort"` included.
       - run: cargo build --target wasm32-wasip1 --release
       - run: cargo nextest run --workspace --no-default-features

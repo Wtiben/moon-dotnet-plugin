@@ -52,53 +52,14 @@ Guarantees:
 - The verify path can be dry-run anytime via the workflow's "Run workflow" button
   (`workflow_dispatch`) — publishing steps only ever run on tag pushes.
 
-## Upstreaming to moonrepo/plugins
+## Known coverage gap
 
-The crate layout already matches `moonrepo/plugins` (`toolchains/<id>/` with
-`Cargo.toml`, `CHANGELOG.md`, `src/tier{1,2,3}.rs`, `tests/`). These changes are
-deliberately deferred to the commit that moves it there, because they are wrong
-while the crate lives here:
-
-- `toolchains/dotnet/Cargo.toml` — point `repository` at
-  `https://github.com/moonrepo/plugins` and `documentation` at
-  `.../tree/master/toolchains/dotnet`. Flipping either early mislabels the OCI
-  artifacts this repo publishes to ghcr.io.
-- `src/tier1.rs` — drop the `docs_url` pointing at this repo's README. No
-  upstream toolchain points at a contributor's repo, and there is no
-  `moonrepo.dev` .NET page to point at instead, so follow `toolchains/ruby` and
-  return `InitializeToolchainOutput::default()`.
-- `Cargo.toml` + `src/tier1.rs` — add
-  `toolchain_common = { path = "../../crates/toolchain-common" }` as the first
-  dependency, then `enable_tracing()` as the first statement of
-  `register_toolchain`. All 14 upstream toolchains do this; it routes host-side
-  crate logs into `moon --log debug` and self-disables under test. The path dep
-  cannot exist in this repo, and vendoring it would pull in `proto_pdk` for
-  nothing.
-- `.moon/workspace.yml` (theirs) — register `dotnet-toolchain: toolchains/dotnet`.
-- Their `.github/workflows/ci.yml` — add `actions/setup-dotnet` with
-  `dotnet-version: '8.0.x'`. Their `.prototools` provisions only
-  moon/bun/node/go/npm, and ~26 of our integration tests spawn a real `dotnet`.
-  This is the one new CI requirement the PR introduces; call it out explicitly.
-- Scope the PR to `toolchains/dotnet/**`. `README.md`, `CLAUDE.md`, `scripts/`,
-  `.github/`, `.cargo/config.toml` and `rust-toolchain.toml` stay here — upstream
-  supplies `moon ci`, `cargo release` and its own root config.
-
-Note that there are **no** `toolchains/*/README.md` files upstream: a toolchain
-directory is exactly `CHANGELOG.md` + `Cargo.toml` + `src/` + `tests/`, and the
-user-facing documentation surface is doc comments on `config.rs` (which become
-the JSON schema) plus `config_url`/`docs_url`.
-
-One pre-submission check this repo cannot run: a default-features (host `cdylib`)
-build on `x86_64-pc-windows-msvc`. Our CI only builds `--no-default-features` on
-windows, and the `rustflags` workaround in `.cargo/config.toml` is
-windows-**gnu**-specific — so the host `cdylib` path is unexercised on MSVC, which
-is what upstream's windows runners use. Expected to pass (`toolchains/go` and
-`toolchains/rust` ship the same `crate-type` and are built there), but worth
-confirming on a machine with the MSVC toolchain before opening the PR.
-
-Expect a maintainer to question a v1.0 from outside the project. The only
-third-party precedent, `toolchains/ruby`, onboarded at `0.1.0` behind an
-`unstable_ruby` config key.
+The host `cdylib` is never built on `x86_64-pc-windows-msvc`. CI builds
+`--no-default-features` on windows (which cfg-gates the whole plugin surface out),
+and the `rustflags` workaround in `.cargo/config.toml` is windows-**gnu**-specific.
+So a default-features build on MSVC is unexercised. Nothing consumes the host
+DLL's exports, so this is a build-time risk only — but if you have the MSVC
+toolchain, `cargo build` on it is worth running before a release.
 
 ## moon facts (verified against moon 2.3.3 and 2.4.5)
 

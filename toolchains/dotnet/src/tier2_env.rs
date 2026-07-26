@@ -217,8 +217,8 @@ pub fn extend_task_command(
         workspace_root: &input.context.workspace_root,
     };
 
-    // Deliberately only DOTNET_ROOT and PATH. No upstream toolchain injects
-    // vendor environment variables users did not ask for, and the
+    // Deliberately only DOTNET_ROOT and PATH. Injecting vendor environment
+    // variables nobody asked for is surprising, and the
     // `DOTNET_CLI_TELEMETRY_OPTOUT` that used to be set here was set *inside*
     // this branch — so it never applied in the common case of a system SDK on
     // PATH with no DOTNET_ROOT. It also does not suppress the "Welcome to .NET"
