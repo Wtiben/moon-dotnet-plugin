@@ -133,9 +133,24 @@ dotnet:
 | Task | Inferred for | Command | Cached |
 |---|---|---|---|
 | `build` | every project | `dotnet build --no-restore --no-dependencies -c <cfg>` + `deps: ['^:build']` | ✅ outputs from evaluated `BaseOutputPath` |
-| `test` | `IsTestProject=true` or a `Microsoft.NET.Test.Sdk` reference | `dotnet test --no-build --no-restore -c <cfg>` + `deps: ['~:build']` — VSTest and Microsoft.Testing.Platform both supported | ✅ (pass/fail state) |
+| `test` | a test project (see below) | `dotnet test --no-build --no-restore -c <cfg>` + `deps: ['~:build']` — VSTest and Microsoft.Testing.Platform both supported | ✅ (pass/fail state) |
 | `run` | `Exe`/`WinExe`, non-test | `dotnet run` | never cached, excluded from CI |
 | `publish` | `Exe`/`WinExe`, non-test, single-TFM | `dotnet publish --no-build --no-restore -c <cfg>` + `deps: ['~:build']` | ✅ outputs from evaluated `PublishDir` |
+
+A project counts as a **test project** when any of these hold, because no single
+signal covers the ecosystem:
+
+- `IsTestProject` is `true`. Set by `Microsoft.NET.Test.Sdk`'s build props, so it
+  only appears once that package has been restored.
+- `IsTestingPlatformApplication` is `true`. Set by test-oriented project SDKs such
+  as `<Project Sdk="MSTest.Sdk">` without needing a restore.
+- A test package is referenced: `Microsoft.NET.Test.Sdk`, the `xunit.v3` family,
+  `Microsoft.Testing.Platform*`, `MSTest`, `NUnit3TestAdapter` or `TUnit`. Package
+  references are visible without a restore, which is what a cold graph build sees.
+
+Matching is exact or by prefix, never a substring, so `Microsoft.AspNetCore.Mvc.Testing`
+and `Microsoft.AspNetCore.TestHost` do not qualify a project on their own. A project
+that sets the properties to `false` (a BenchmarkDotNet host, typically) is excluded.
 
 Design notes:
 
