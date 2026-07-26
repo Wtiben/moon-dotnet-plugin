@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3
+
+#### ⚙️ Internal
+
+- Version bump only. No functional changes since 0.3.2.
+
 ## 0.3.2
 
 #### 🐞 Fixes
