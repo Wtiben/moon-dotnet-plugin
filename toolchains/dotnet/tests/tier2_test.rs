@@ -169,6 +169,25 @@ mod dotnet_toolchain_tier2 {
             project.tasks.keys().map(|id| id.as_str()).collect()
         }
 
+        /// Inferred `test` command for the `mtp` fixture's `suite` project.
+        async fn mtp_test_command(
+            sandbox: &moon_pdk_test_utils::MoonWasmSandbox,
+        ) -> Option<moon_config::PartialTaskArgs> {
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let mut input = ExtendProjectGraphInput::default();
+            input
+                .project_sources
+                .insert(Id::raw("suite"), "suite".into());
+            input.toolchain_config = json!({ "inferDependencies": false });
+
+            let output = plugin.extend_project_graph(input).await;
+
+            output.extended_projects[&Id::raw("suite")].tasks[&Id::raw("test")]
+                .command
+                .clone()
+        }
+
         #[tokio::test(flavor = "multi_thread")]
         async fn infers_tasks_by_default() {
             let sandbox = create_moon_sandbox("projects");
@@ -219,25 +238,15 @@ mod dotnet_toolchain_tier2 {
         }
 
         #[tokio::test(flavor = "multi_thread")]
-        async fn adapts_the_test_command_to_the_testing_platform_runner() {
-            // `global.json` selects Microsoft.Testing.Platform, and the
-            // project directory holds two project files so the test command
-            // has to name one — the case where the two runners' command
-            // lines are incompatible.
+        async fn passes_the_project_through_a_flag_for_the_testing_platform() {
+            // The `mtp` fixture's `global.json` selects Microsoft.Testing.Platform,
+            // and the project directory holds two project files so the command
+            // has to name one — the case where the two runners' command lines
+            // are incompatible.
             let sandbox = create_moon_sandbox("mtp");
-            let plugin = sandbox.create_toolchain("dotnet").await;
-
-            let mut input = ExtendProjectGraphInput::default();
-            input
-                .project_sources
-                .insert(Id::raw("suite"), "suite".into());
-            input.toolchain_config = json!({ "inferDependencies": false });
-
-            let output = plugin.extend_project_graph(input).await;
-            let suite = &output.extended_projects[&Id::raw("suite")];
 
             assert_eq!(
-                suite.tasks[&Id::raw("test")].command,
+                mtp_test_command(&sandbox).await,
                 Some(moon_config::PartialTaskArgs::List(vec![
                     "dotnet".into(),
                     "test".into(),
@@ -249,24 +258,17 @@ mod dotnet_toolchain_tier2 {
                     "Debug".into(),
                 ]))
             );
+        }
 
-            // Without the runner selected, the same project keeps the
-            // positional form that classic VSTest mode requires.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn passes_the_project_positionally_for_vstest() {
+            // Same fixture with the runner deselected: classic VSTest mode
+            // rejects `--project` and requires the positional form.
+            let sandbox = create_moon_sandbox("mtp");
             sandbox.create_file("global.json", "{}");
 
-            let plugin = sandbox.create_toolchain("dotnet").await;
-
-            let mut input = ExtendProjectGraphInput::default();
-            input
-                .project_sources
-                .insert(Id::raw("suite"), "suite".into());
-            input.toolchain_config = json!({ "inferDependencies": false });
-
-            let output = plugin.extend_project_graph(input).await;
-            let suite = &output.extended_projects[&Id::raw("suite")];
-
             assert_eq!(
-                suite.tasks[&Id::raw("test")].command,
+                mtp_test_command(&sandbox).await,
                 Some(moon_config::PartialTaskArgs::List(vec![
                     "dotnet".into(),
                     "test".into(),

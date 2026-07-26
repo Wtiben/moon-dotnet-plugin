@@ -1,4 +1,0 @@
-language: 'vb'
-
-toolchains:
-  default: 'dotnet'

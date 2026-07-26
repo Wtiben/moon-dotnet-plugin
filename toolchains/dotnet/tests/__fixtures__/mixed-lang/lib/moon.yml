@@ -1,4 +1,0 @@
-language: 'fsharp'
-
-toolchains:
-  default: 'dotnet'
