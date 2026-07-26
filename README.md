@@ -272,6 +272,40 @@ restore and repeat runs skip it. Global tools are out of scope.
   `dotnet nuget locals all --clear` in your Dockerfile if you want that.
 - Add `.moon/cache` (and ideally `.moon/docker`) to your `.dockerignore`.
 
+## Verified against real repositories
+
+Each of these was cloned unmodified, given a generated project map, and run with the
+released plugin. In every case the graph built with no errors and the number of moon
+projects matched the number of project files on disk exactly.
+
+| Repository | Projects | Inferred edges | Tasks inferred | Cold graph | Warm graph |
+| --- | --- | --- | --- | --- | --- |
+| `serilog/serilog` | 6 | 6 | 6 build, 3 test, 1 run, 1 publish | 8s | 1s |
+| `ThreeMammals/Ocelot` | 21 | 30 | 21 build, 3 test, 15 run | 6s | 1s |
+| `dotnet/eShop` | 24 | 46 | 24 build, 5 test, 12 run, 10 publish | 7s | <1s |
+| `jellyfin/jellyfin` | 42 | 134 | 42 build, 16 test, 3 run, 3 publish | 7s | 1s |
+| `OrchardCMS/OrchardCore` | 238 | 1485 | 238 build, 4 test, 7 run, 3 publish | 18s | 1s |
+| `abpframework/abp` | 671 | 2374 | 671 build, 160 test, 65 run, 64 publish | 43s | 1s |
+
+Between them these cover Central Package Management, Microsoft.Testing.Platform and
+classic VSTest, multi-targeted projects, custom MSBuild project SDKs (`MSTest.Sdk`,
+`Aspire.AppHost.Sdk`), and `global.json` SDK pins using every `rollForward` mode.
+
+Beyond building the graph:
+
+- `moon run <project>:build` was run for real in serilog, eShop, jellyfin and
+  OrchardCore. All succeeded, and a second run was served from moon's cache.
+- Affected detection was checked in serilog: touching one file in `src/Serilog`
+  marks all 6 projects affected through `--downstream deep`, using only inferred
+  edges. That repository has no `moon.yml` and no hand-written `dependsOn` at all.
+- The warm timings are the evaluated-package-set cache doing its job. Nothing else
+  changed between the two runs.
+
+Two things worth knowing if you reproduce this. Every repository needed a generated
+`projects.sources` map, because moon cannot glob project files (see the note under
+[Task inference](#task-inference)). And moon disables affected checks entirely on a
+shallow clone, so `git clone --depth 1` will report nothing as affected.
+
 ## Limitations
 
 - **SDK-style projects only** — no legacy csproj. `dotnet` CLI only; no NuGet workloads
