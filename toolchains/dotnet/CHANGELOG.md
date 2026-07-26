@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1
+
+#### 🐞 Fixes
+
+- An unresolvable SDK pin with `version:` configured now skips .NET graph evaluation entirely
+  instead of letting every project fall back to its own MSBuild invocation. 0.3.0 returned an empty
+  batch there, which sent each project through the per-project fallback and reproduced the dotnet
+  host's output once per project — the exact noise the single report exists to replace. Observed on a
+  232-project workspace: one warning instead of one per project.
+
 ## 0.3.0
 
 #### 🚀 Updates

@@ -172,12 +172,18 @@ fn batch_eval_env(
 /// - `version:` configured: tier 3 installs that SDK later in the same run — the
 ///   project graph is built before the action pipeline starts, so failing here
 ///   would deadlock the very bootstrap the setting exists for. Warns instead and
-///   contributes nothing, the same way a missing `dotnet` does.
+///   returns `None`, the same way a missing `dotnet` does.
+///
+/// `None` means "contribute nothing at all", and is distinct from `Some(empty)`:
+/// an empty batch sends every project through per-project evaluation, which is
+/// right for a recoverable failure and wrong when no SDK exists — there it would
+/// reproduce the host's output once per project, the exact noise this reports
+/// once instead.
 fn run_batch_evaluation(
     input: &ExtendProjectGraphInput,
     indexes: &ProjectIndexes,
     eval_env: &EvalEnv,
-) -> FnResult<BTreeMap<String, MsbuildEvaluation>> {
+) -> FnResult<Option<BTreeMap<String, MsbuildEvaluation>>> {
     let all_project_paths = indexes
         .files
         .values()
@@ -186,7 +192,7 @@ fn run_batch_evaluation(
         .collect::<Vec<_>>();
 
     match evaluate_projects_batch(&input.context.workspace_root, &all_project_paths, eval_env) {
-        Ok(results) => Ok(results),
+        Ok(results) => Ok(Some(results)),
         Err(error) => {
             let message = error.to_string();
 
@@ -213,7 +219,7 @@ fn run_batch_evaluation(
                         "{requirement} yet, so .NET project graph evaluation is being skipped — no dependency edges or inferred tasks will be contributed on this run. moon installs the SDK configured by <property>version</property> later in this run; re-run afterwards to pick them up."
                     );
 
-                    return Ok(BTreeMap::new());
+                    return Ok(None);
                 }
 
                 return Err(plugin_err!(
@@ -227,7 +233,7 @@ fn run_batch_evaluation(
                 error
             );
 
-            Ok(BTreeMap::new())
+            Ok(Some(BTreeMap::new()))
         }
     }
 }
@@ -471,7 +477,13 @@ pub fn extend_project_graph(
     }
 
     let eval_env = batch_eval_env(&config, &input, &indexes)?;
-    let mut batch = run_batch_evaluation(&input, &indexes, &eval_env)?;
+
+    // `None` means no SDK is available to evaluate with. Returning here rather
+    // than continuing with an empty batch is what keeps a single unresolvable pin
+    // from being reported once per project by the per-project fallback.
+    let Some(mut batch) = run_batch_evaluation(&input, &indexes, &eval_env)? else {
+        return Ok(Json(output));
+    };
 
     let workspace_dir = input
         .context
