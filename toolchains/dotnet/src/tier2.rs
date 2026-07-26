@@ -1,6 +1,7 @@
 use crate::config::DotnetToolchainConfig;
 use crate::discovery::{
     contains_lockfile, find_config_files, find_lock_files, find_project_files, has_solution_file,
+    walk_up,
 };
 use crate::eval_cache::{read_eval_cache, write_eval_cache};
 use crate::infer_tasks::{InferInputs, infer_tasks, reportable_conflicts};
@@ -33,22 +34,12 @@ pub fn locate_dependencies_root(
     let mut output = LocateDependenciesRootOutput::default();
     let workspace_root = &input.context.workspace_root;
 
-    // Walk upward from the starting dir to (and including) the workspace
-    // root, never above it: parent() past the WASI preopen boundary is
-    // undefined. Nearest solution file wins.
-    let mut current = Some(input.starting_dir.clone());
-
-    while let Some(dir) = current {
+    // Nearest solution file wins.
+    for dir in walk_up(&input.starting_dir, workspace_root) {
         if has_solution_file(&dir) {
             output.root = dir.virtual_path();
             break;
         }
-
-        if dir.any_path() == workspace_root.any_path() {
-            break;
-        }
-
-        current = dir.parent();
     }
 
     // Fall back to the nearest lockfile, then the nearest project file.
@@ -57,19 +48,11 @@ pub fn locate_dependencies_root(
             break;
         }
 
-        let mut current = Some(input.starting_dir.clone());
-
-        while let Some(dir) = current {
+        for dir in walk_up(&input.starting_dir, workspace_root) {
             if !probe(&dir).is_empty() {
                 output.root = dir.virtual_path();
                 break;
             }
-
-            if dir.any_path() == workspace_root.any_path() {
-                break;
-            }
-
-            current = dir.parent();
         }
     }
 
@@ -640,9 +623,8 @@ pub fn hash_task_contents(
     // evaluated package set below, not content-hashed.
     let mut configs: BTreeMap<String, String> = BTreeMap::new();
     let workspace_root = &input.context.workspace_root;
-    let mut current = Some(project_root.clone());
 
-    while let Some(dir) = current {
+    for dir in walk_up(&project_root, workspace_root) {
         for file in find_config_files(&dir) {
             let key = file
                 .virtual_path()
@@ -651,12 +633,6 @@ pub fn hash_task_contents(
 
             configs.insert(key, fs::read_file(&file)?);
         }
-
-        if dir.any_path() == workspace_root.any_path() {
-            break;
-        }
-
-        current = dir.parent();
     }
 
     // Lock file(s) present: their content already pins the entire resolved

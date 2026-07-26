@@ -6,6 +6,7 @@
 //! that materialize an environment.
 
 use crate::config::DotnetToolchainConfig;
+use crate::discovery::walk_up;
 use crate::eval_cache::content_digest;
 use crate::global_json::{SdkRequirement, parse_sdk_requirement, satisfies, selects_test_platform};
 use crate::msbuild::EvalEnv;
@@ -54,9 +55,7 @@ pub fn find_sdk_requirement(
     start: &VirtualPath,
     workspace_root: &VirtualPath,
 ) -> Option<(String, SdkRequirement)> {
-    let mut current = Some(start.to_owned());
-
-    while let Some(dir) = current {
+    for dir in walk_up(start, workspace_root) {
         let file = dir.join("global.json");
 
         if file.exists() {
@@ -65,12 +64,6 @@ pub fn find_sdk_requirement(
                 .and_then(|content| parse_sdk_requirement(&content))
                 .map(|requirement| (file.to_string(), requirement));
         }
-
-        if dir.any_path() == workspace_root.any_path() {
-            break;
-        }
-
-        current = dir.parent();
     }
 
     None
@@ -81,9 +74,7 @@ pub fn find_sdk_requirement(
 /// whether or not it names a runner — the dotnet host resolves exactly one
 /// `global.json`, it does not merge them.
 pub fn uses_test_platform_runner(start: &VirtualPath, workspace_root: &VirtualPath) -> bool {
-    let mut current = Some(start.to_owned());
-
-    while let Some(dir) = current {
+    for dir in walk_up(start, workspace_root) {
         let file = dir.join("global.json");
 
         if file.exists() {
@@ -91,12 +82,6 @@ pub fn uses_test_platform_runner(start: &VirtualPath, workspace_root: &VirtualPa
                 .map(|content| selects_test_platform(&content))
                 .unwrap_or(false);
         }
-
-        if dir.any_path() == workspace_root.any_path() {
-            break;
-        }
-
-        current = dir.parent();
     }
 
     false
@@ -276,22 +261,14 @@ pub fn setup_environment(
     // the repository root, which is not necessarily a dependencies root (any
     // project directory holding a lock file becomes one).
     let mut tool_manifest = None;
-    let workspace_root = &input.context.workspace_root;
-    let mut current = Some(input.root.clone());
 
-    while let Some(dir) = current {
+    for dir in walk_up(&input.root, &input.context.workspace_root) {
         let candidate = dir.join(".config").join("dotnet-tools.json");
 
         if candidate.exists() {
             tool_manifest = Some(candidate);
             break;
         }
-
-        if dir.any_path() == workspace_root.any_path() {
-            break;
-        }
-
-        current = dir.parent();
     }
 
     if let Some(tool_manifest) = tool_manifest {

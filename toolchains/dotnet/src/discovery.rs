@@ -1,8 +1,9 @@
 //! Locating the files this toolchain cares about, relative to a directory.
 //!
-//! All of these enumerate a single directory downwards. There is no PDK
-//! equivalent: `warpgate_pdk` exposes no directory listing, and
-//! `moon_pdk::locate_root*` only walks *up*.
+//! The `find_*` helpers enumerate one directory; `walk_up` supplies the
+//! workspace-bounded upward traversal they are usually driven by. Neither has a
+//! PDK equivalent: `warpgate_pdk` exposes no directory listing at all, and
+//! `moon_pdk::locate_root*` walks up without a bound.
 
 use moon_pdk_api::VirtualPath;
 
@@ -135,6 +136,39 @@ pub fn contains_lockfile(dir: &VirtualPath, depth: u8) -> bool {
     subdirs
         .into_iter()
         .any(|name| contains_lockfile(&dir.join(name), depth - 1))
+}
+
+/// Directories from `start` up to and including `workspace_root`.
+///
+/// Every upward search in this plugin is bounded by the workspace root, which is
+/// why moon's own `locate_root*` helpers are not used: they are unbounded, so
+/// `global.json` or `dotnet-tools.json` discovery could escape into `$HOME` or a
+/// parent repository and pick up a file that governs nothing here. The bound
+/// matters most for `VirtualPath::Real`, whose `parent()` keeps yielding host
+/// directories all the way to the filesystem root. (`starbase_utils::fs::
+/// find_upwards_until` is not an option either — it takes `Path`, not
+/// `VirtualPath`.)
+///
+/// Stops early if `start` is not under `workspace_root`, once `parent()` runs
+/// out.
+pub fn walk_up(
+    start: &VirtualPath,
+    workspace_root: &VirtualPath,
+) -> impl Iterator<Item = VirtualPath> {
+    let root = workspace_root.any_path().to_owned();
+    let mut next = Some(start.to_owned());
+
+    std::iter::from_fn(move || {
+        let dir = next.take()?;
+
+        next = if dir.any_path() == &root {
+            None
+        } else {
+            dir.parent()
+        };
+
+        Some(dir)
+    })
 }
 
 /// Does a directory directly contain a solution file (*.sln / *.slnx)?

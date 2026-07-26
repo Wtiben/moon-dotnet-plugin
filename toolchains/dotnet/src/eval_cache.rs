@@ -6,7 +6,7 @@
 //! lock files pays one MSBuild evaluation *per project* while hashing, which is
 //! exactly what batching the graph evaluation exists to avoid.
 
-use crate::discovery::{find_config_files, find_project_files};
+use crate::discovery::{find_config_files, find_project_files, walk_up};
 use moon_pdk_api::VirtualPath;
 use serde::{Deserialize, Serialize};
 use starbase_utils::fs;
@@ -107,18 +107,10 @@ fn eval_cache_digest(project_root: &VirtualPath, workspace_root: &VirtualPath) -
         push_framed(&mut buffer, &file);
     }
 
-    let mut current = Some(project_root.to_owned());
-
-    while let Some(dir) = current {
+    for dir in walk_up(project_root, workspace_root) {
         for file in find_config_files(&dir) {
             push_framed(&mut buffer, &file);
         }
-
-        if dir.any_path() == workspace_root.any_path() {
-            break;
-        }
-
-        current = dir.parent();
     }
 
     content_digest(&buffer)
