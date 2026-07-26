@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.2
+
+#### 🐞 Fixes
+
+- Test projects that carry no `Microsoft.NET.Test.Sdk` reference are now detected. Microsoft.Testing
+  Platform setups replace that package outright, so neither of the previous signals fired: a
+  `<Project Sdk="MSTest.Sdk">` project reports an empty `IsTestProject`, and an `xunit.v3` project on
+  an unrestored tree reports neither the property nor the old package. Detection now also accepts
+  `IsTestingPlatformApplication` and the MTP-era test package families. Found by running the plugin
+  against dotnet/eShop (5 test projects missed, all inferred as `run`/`publish` instead) and
+  OrchardCMS/OrchardCore (4 missed). Package matching is exact or by prefix, never a substring, so
+  `Microsoft.AspNetCore.Mvc.Testing` and `Microsoft.AspNetCore.TestHost` do not qualify a project on
+  their own, and a BenchmarkDotNet project setting the properties to `false` stays excluded.
+
 ## 0.3.1
 
 #### 🐞 Fixes

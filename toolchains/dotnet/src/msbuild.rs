@@ -76,7 +76,10 @@ impl MsbuildEvaluation {
 /// feed the project alias and manifest metadata.
 /// `TestingPlatformDotnetTestSupport` opts a single project into
 /// Microsoft.Testing.Platform, which changes the `dotnet test` command line.
-pub const EVAL_PROPERTIES: &str = "TargetFramework,TargetFrameworks,OutputType,IsTestProject,IsPackable,RestorePackagesWithLockFile,BaseOutputPath,BaseIntermediateOutputPath,PublishDir,Configuration,AssemblyName,Version,TestingPlatformDotnetTestSupport";
+/// `IsTestingPlatformApplication` identifies a test project that carries no
+/// `Microsoft.NET.Test.Sdk` reference at all, which is the norm for the
+/// test-oriented project SDKs (`<Project Sdk="MSTest.Sdk">`).
+pub const EVAL_PROPERTIES: &str = "TargetFramework,TargetFrameworks,OutputType,IsTestProject,IsTestingPlatformApplication,IsPackable,RestorePackagesWithLockFile,BaseOutputPath,BaseIntermediateOutputPath,PublishDir,Configuration,AssemblyName,Version,TestingPlatformDotnetTestSupport";
 
 /// The exact `-getItem` list requested per evaluation. `PackageVersion`
 /// items exist under Central Package Management (declared in

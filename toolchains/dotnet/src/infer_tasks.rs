@@ -61,6 +61,33 @@ fn strip_prefix_ci<'a>(value: &'a str, base: &str) -> Option<&'a str> {
     }
 }
 
+/// Does a package identity mark its project as a test project?
+///
+/// Matching is exact or by prefix, never a substring search: real test projects
+/// commonly reference `Microsoft.AspNetCore.Mvc.Testing` and
+/// `Microsoft.AspNetCore.TestHost`, and plenty of non-test libraries reference
+/// helpers with "test" in the name. Those must not qualify on their own.
+///
+/// The prefixes cover the families that replaced `Microsoft.NET.Test.Sdk` under
+/// Microsoft.Testing.Platform, where that package is absent entirely — `xunit.v3`
+/// ships as `xunit.v3`, `xunit.v3.core`, `xunit.v3.mtp-v2` and more, so the whole
+/// family is matched rather than enumerated.
+fn is_test_package(name: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "microsoft.net.test.sdk",
+        "mstest",
+        "mstest.testframework",
+        "nunit3testadapter",
+        "tunit",
+    ];
+
+    const PREFIXES: &[&str] = &["xunit.v3", "microsoft.testing.platform", "tunit."];
+
+    let lower = name.to_ascii_lowercase();
+
+    EXACT.contains(&lower.as_str()) || PREFIXES.iter().any(|prefix| lower.starts_with(prefix))
+}
+
 /// Turn an evaluated MSBuild output path into a moon task output: relative
 /// paths pass through, absolute paths under the project dir become
 /// project-relative, absolute paths under the workspace root become
@@ -234,16 +261,30 @@ pub fn infer_tasks(
     let mut tasks = BTreeMap::new();
     let evaluation = inputs.evaluation;
 
-    // `IsTestProject` is set by Microsoft.NET.Test.Sdk's build props, which
-    // are only imported after a restore. Fall back to the package reference
-    // itself so unrestored projects are detected too.
+    // Three independent signals, because no single one covers the ecosystem:
+    //
+    // - `IsTestProject` comes from Microsoft.NET.Test.Sdk's build props, so it
+    //   is only set once that package is restored.
+    // - `IsTestingPlatformApplication` is set by test-oriented project SDKs
+    //   (`<Project Sdk="MSTest.Sdk">`) without needing a restore, and by
+    //   Microsoft.Testing.Platform packages once restored.
+    // - The package references themselves are visible without any restore,
+    //   which is the situation during a cold project-graph build.
+    //
+    // Verified against real repositories: an MSTest.Sdk project reports only
+    // `IsTestingPlatformApplication`, an xunit.v3 project on an unrestored tree
+    // reports only its package, and a BenchmarkDotNet project sets both
+    // properties to `false` and must stay excluded.
     let is_test = evaluation
         .property("IsTestProject")
         .eq_ignore_ascii_case("true")
         || evaluation
+            .property("IsTestingPlatformApplication")
+            .eq_ignore_ascii_case("true")
+        || evaluation
             .package_references()
             .keys()
-            .any(|name| name.eq_ignore_ascii_case("Microsoft.NET.Test.Sdk"));
+            .any(|name| is_test_package(name));
 
     let output_type = evaluation.property("OutputType");
     let is_exe = !is_test

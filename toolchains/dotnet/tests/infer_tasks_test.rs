@@ -52,6 +52,20 @@ mod infer_tasks {
         eval
     }
 
+    /// An `Exe` with the given package references and no test-related property,
+    /// mirroring what an unrestored tree reports.
+    fn exe_with_packages(packages: &[&str]) -> MsbuildEvaluation {
+        let mut eval = evaluation(&[("OutputType", "Exe"), ("TargetFramework", "net10.0")]);
+        eval.items.insert(
+            "PackageReference".into(),
+            packages
+                .iter()
+                .map(|name| serde_json::json!({ "Identity": name }))
+                .collect(),
+        );
+        eval
+    }
+
     fn command_line(task: &PartialTaskConfig) -> String {
         match task.command.as_ref().unwrap() {
             PartialTaskArgs::List(list) => list.join(" "),
@@ -231,6 +245,71 @@ mod infer_tasks {
 
         let tasks = infer(&eval, &InferTasksSetting::Enabled(false), &[]);
         assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn detects_test_projects_that_have_no_microsoft_net_test_sdk() {
+        // Microsoft.Testing.Platform test projects replace Microsoft.NET.Test.Sdk
+        // outright. Shapes taken from real repositories: dotnet/eShop uses
+        // `<Project Sdk="MSTest.Sdk">`, which sets the property and references no
+        // test package; OrchardCMS/OrchardCore uses `xunit.v3.mtp-v2` with
+        // neither property set on an unrestored tree.
+        let by_property = evaluation(&[
+            ("OutputType", "Exe"),
+            ("TargetFramework", "net10.0"),
+            ("IsTestingPlatformApplication", "true"),
+        ]);
+
+        for (label, eval) in [
+            ("MSTest.Sdk property", by_property),
+            ("xunit.v3 package", exe_with_packages(&["xunit.v3.mtp-v2"])),
+            (
+                "platform package",
+                exe_with_packages(&["Microsoft.Testing.Platform.MSBuild"]),
+            ),
+        ] {
+            let tasks = infer(&eval, &InferTasksSetting::default(), &[]);
+            let ids = tasks.keys().map(|id| id.as_str()).collect::<Vec<_>>();
+
+            assert!(
+                ids.contains(&"test"),
+                "{label}: expected a test task, got {ids:?}"
+            );
+            // A test project is not an application, so it gets neither of these.
+            assert!(!ids.contains(&"run"), "{label}: {ids:?}");
+            assert!(!ids.contains(&"publish"), "{label}: {ids:?}");
+        }
+    }
+
+    #[test]
+    fn does_not_mistake_test_helper_packages_for_a_test_project() {
+        // All three appear in real test-adjacent projects. Matching "test" as a
+        // substring would wrongly flag every one of them, and a BenchmarkDotNet
+        // project explicitly sets the properties to `false`.
+        let eval = exe_with_packages(&[
+            "Microsoft.AspNetCore.Mvc.Testing",
+            "Microsoft.AspNetCore.TestHost",
+            "BenchmarkDotNet",
+        ]);
+
+        let tasks = infer(&eval, &InferTasksSetting::default(), &[]);
+        let ids = tasks.keys().map(|id| id.as_str()).collect::<Vec<_>>();
+
+        assert!(!ids.contains(&"test"), "{ids:?}");
+        assert!(
+            ids.contains(&"run"),
+            "an executable must still get run: {ids:?}"
+        );
+
+        let benchmarks = evaluation(&[
+            ("OutputType", "Exe"),
+            ("TargetFramework", "net10.0"),
+            ("IsTestProject", "false"),
+            ("IsTestingPlatformApplication", "false"),
+        ]);
+        let tasks = infer(&benchmarks, &InferTasksSetting::default(), &[]);
+
+        assert!(!tasks.keys().any(|id| id.as_str() == "test"));
     }
 
     #[test]
