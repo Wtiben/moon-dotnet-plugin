@@ -152,8 +152,9 @@ mod msbuild {
 
     #[test]
     fn finds_the_common_source_prefix() {
-        // The common shape: every .NET project under one subtree, so a
-        // global.json there governs evaluation just as it governs tasks.
+        // The common shape in a polyglot repository: every .NET project sits
+        // under one subtree, so a `global.json` there governs evaluation just as
+        // it governs the tasks that run inside it.
         assert_eq!(
             common_source_prefix(&[
                 "src/backend/Attachment/Attachment.Service",

@@ -217,7 +217,8 @@ mod tests {
 
     #[test]
     fn parses_a_global_json_carrying_unrelated_keys() {
-        // Real shape from a production repo: extra keys must not matter.
+        // Shape taken from a production repository: `msbuild-sdks` and `test`
+        // sit alongside `sdk`, and neither must interfere with the pin.
         let requirement = parse_sdk_requirement(
             r#"{
               "sdk": {
@@ -270,8 +271,9 @@ mod tests {
             parse_sdk_requirement(r#"{"sdk":{"version":"10.0.301","rollForward":"latestMajor"}}"#)
                 .unwrap();
 
-        // The exact scenario from a production repository: a leftover
-        // ~/.dotnet holding only SDK 8 cannot serve a 10.x pin.
+        // The case this guard exists for: a leftover `~/.dotnet` holding only
+        // SDK 8 cannot serve a 10.x pin, so it must not be preferred over the
+        // `dotnet` on PATH.
         assert!(!satisfies(&versions(&["8.0.423"]), &requirement));
         assert!(satisfies(&versions(&["8.0.423", "10.0.301"]), &requirement));
         assert!(satisfies(&versions(&["11.0.100"]), &requirement));
