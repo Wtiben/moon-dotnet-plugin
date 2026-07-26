@@ -1,7 +1,7 @@
 use crate::config::DotnetToolchainConfig;
 use crate::discovery::{
-    contains_lockfile, find_config_files, find_lock_files, find_project_files, has_solution_file,
-    walk_up,
+    LOCKFILE_SEARCH_DEPTH, contains_lockfile, find_config_files, find_lock_files,
+    find_project_files, has_solution_file, walk_up,
 };
 use crate::eval_cache::{read_eval_cache, write_eval_cache};
 use crate::msbuild::evaluate_project;
@@ -69,7 +69,7 @@ pub fn install_dependencies(
     // The mere presence of a lock file opts a project into lock-file restore;
     // --locked-mode additionally fails restore (NU1004) when declared
     // dependencies drifted from the lock file.
-    if contains_lockfile(&input.root, 5) {
+    if contains_lockfile(&input.root, LOCKFILE_SEARCH_DEPTH) {
         args.push("--locked-mode".into());
     }
 

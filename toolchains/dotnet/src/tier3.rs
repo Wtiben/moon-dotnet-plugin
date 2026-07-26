@@ -1,5 +1,5 @@
 use crate::config::DotnetToolchainConfig;
-use crate::discovery::SKIP_DIRS;
+use crate::discovery::{SKIP_DIRS, installed_sdk_versions};
 use crate::dotnet_install::{
     exact_version, install_script_file_name, install_script_url, install_version_args,
 };
@@ -21,13 +21,13 @@ extern "ExtismHost" {
 /// environments, setup has no project to walk up from — and the pin often
 /// lives in a subtree (`src/backend/global.json`) rather than at the root.
 fn collect_global_json_files(dir: &VirtualPath, depth: u8, out: &mut Vec<VirtualPath>) {
-    let Ok(entries) = std::fs::read_dir(dir.any_path()) else {
+    let Ok(entries) = fs::read_dir(dir.any_path()) else {
         return;
     };
 
     let mut subdirs = vec![];
 
-    for entry in entries.flatten() {
+    for entry in entries {
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
@@ -48,23 +48,6 @@ fn collect_global_json_files(dir: &VirtualPath, depth: u8, out: &mut Vec<Virtual
     for name in subdirs {
         collect_global_json_files(&dir.join(name), depth - 1, out);
     }
-}
-
-/// SDK versions laid out under an install root (`<root>/sdk/<version>`).
-fn installed_sdk_versions(root: &VirtualPath) -> Vec<String> {
-    let mut versions = vec![];
-
-    if let Ok(entries) = std::fs::read_dir(root.join("sdk").any_path()) {
-        for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|kind| kind.is_dir())
-                && let Ok(name) = entry.file_name().into_string()
-            {
-                versions.push(name);
-            }
-        }
-    }
-
-    versions
 }
 
 /// Warn when the SDKs now present in the install root cannot serve a

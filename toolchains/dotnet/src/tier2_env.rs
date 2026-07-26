@@ -6,7 +6,7 @@
 //! that materialize an environment.
 
 use crate::config::DotnetToolchainConfig;
-use crate::discovery::walk_up;
+use crate::discovery::{installed_sdk_versions, walk_up};
 use crate::eval_cache::content_digest;
 use crate::global_json::{SdkRequirement, parse_sdk_requirement, satisfies, selects_test_platform};
 use crate::msbuild::EvalEnv;
@@ -21,23 +21,6 @@ use starbase_utils::fs;
 #[host_fn]
 extern "ExtismHost" {
     fn host_log(input: Json<HostLogInput>);
-}
-
-/// SDK versions laid out under a `DOTNET_ROOT` (`<root>/sdk/<version>`).
-pub fn installed_sdk_versions(root: &VirtualPath) -> Vec<String> {
-    let mut versions = vec![];
-
-    if let Ok(entries) = std::fs::read_dir(root.join("sdk").any_path()) {
-        for entry in entries.flatten() {
-            if entry.file_type().is_ok_and(|kind| kind.is_dir())
-                && let Ok(name) = entry.file_name().into_string()
-            {
-                versions.push(name);
-            }
-        }
-    }
-
-    versions
 }
 
 /// Nearest `global.json` SDK pin, searching from `start` up to (and

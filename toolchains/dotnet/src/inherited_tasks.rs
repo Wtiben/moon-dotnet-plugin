@@ -7,7 +7,7 @@
 //! entirely is the only safe option.
 
 use moon_pdk_api::VirtualPath;
-use starbase_utils::yaml;
+use starbase_utils::{fs, yaml};
 use std::collections::BTreeMap;
 
 /// Partial shape of an inherited tasks file (`.moon/tasks.yml` or
@@ -68,8 +68,8 @@ fn applies_to_dotnet(scope: Option<&InheritedByScope>) -> bool {
 }
 
 fn collect_yaml_files(dir: &VirtualPath, out: &mut Vec<VirtualPath>) {
-    if let Ok(entries) = std::fs::read_dir(dir.any_path()) {
-        for entry in entries.flatten() {
+    if let Ok(entries) = fs::read_dir(dir.any_path()) {
+        for entry in entries {
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
             };

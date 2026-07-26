@@ -6,6 +6,7 @@
 //! `moon_pdk::locate_root*` walks up without a bound.
 
 use moon_pdk_api::VirtualPath;
+use starbase_utils::fs;
 
 /// Project file extensions this toolchain understands.
 pub const PROJECT_EXTENSIONS: &[&str] = &["csproj", "fsproj", "vbproj"];
@@ -28,32 +29,61 @@ pub const CONFIG_FILE_NAMES: &[&str] = &[
     "nuget.config",
 ];
 
+/// Does a file name carry one of the given extensions (case-insensitively)?
+fn has_extension(name: &str, extensions: &[&str]) -> bool {
+    name.rsplit_once('.').is_some_and(|(_, ext)| {
+        extensions
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(ext))
+    })
+}
+
+/// Files directly inside a directory whose name satisfies `keep`, sorted by
+/// name and returned as paths under `dir`.
+///
+/// An unreadable directory yields nothing rather than an error. Every caller
+/// treats "nothing matched" and "could not look" identically, and propagating
+/// would turn a single unreadable subdirectory into a failed
+/// `install_dependencies` (via `contains_lockfile`'s recursion) or force the
+/// infallible digest and boolean-probe callers to change shape. Note that
+/// `fs::read_dir` already maps a missing directory to an empty list, so this
+/// only absorbs real I/O failures — permissions, symlink loops, WASI
+/// `NotCapable`.
+fn list_files(dir: &VirtualPath, keep: impl Fn(&str) -> bool) -> Vec<VirtualPath> {
+    let Ok(entries) = fs::read_dir(dir.any_path()) else {
+        return vec![];
+    };
+
+    let mut names = entries
+        .into_iter()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| keep(name))
+        .collect::<Vec<_>>();
+
+    names.sort();
+
+    names.into_iter().map(|name| dir.join(name)).collect()
+}
+
+/// Names of the subdirectories directly inside a directory. Same
+/// unreadable-yields-nothing contract as [`list_files`].
+fn list_dirs(dir: &VirtualPath) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dir.any_path()) else {
+        return vec![];
+    };
+
+    entries
+        .into_iter()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect()
+}
+
 /// List MSBuild project files (*.csproj etc.) directly inside a directory
 /// (non-recursive).
 pub fn find_project_files(dir: &VirtualPath) -> Vec<VirtualPath> {
-    let mut found = vec![];
-
-    if let Ok(entries) = std::fs::read_dir(dir.any_path()) {
-        let mut names = entries
-            .flatten()
-            .filter_map(|entry| entry.file_name().into_string().ok())
-            .filter(|name| {
-                name.rsplit_once('.').is_some_and(|(_, ext)| {
-                    PROJECT_EXTENSIONS
-                        .iter()
-                        .any(|known| known.eq_ignore_ascii_case(ext))
-                })
-            })
-            .collect::<Vec<_>>();
-
-        names.sort();
-
-        for name in names {
-            found.push(dir.join(name));
-        }
-    }
-
-    found
+    list_files(dir, |name| has_extension(name, PROJECT_EXTENSIONS))
 }
 
 /// NuGet lock file names: the default `packages.lock.json`, plus the
@@ -69,74 +99,48 @@ pub fn is_lock_file_name(name: &str) -> bool {
 
 /// List NuGet lock files directly inside a directory (non-recursive), sorted.
 pub fn find_lock_files(dir: &VirtualPath) -> Vec<VirtualPath> {
-    let mut names = vec![];
-
-    if let Ok(entries) = std::fs::read_dir(dir.any_path()) {
-        names = entries
-            .flatten()
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-            .filter_map(|entry| entry.file_name().into_string().ok())
-            .filter(|name| is_lock_file_name(name))
-            .collect::<Vec<_>>();
-
-        names.sort();
-    }
-
-    names.into_iter().map(|name| dir.join(name)).collect()
+    list_files(dir, is_lock_file_name)
 }
 
 /// List hash-relevant config files directly inside a directory
 /// (non-recursive), sorted by actual file name.
 pub fn find_config_files(dir: &VirtualPath) -> Vec<VirtualPath> {
-    let mut names = vec![];
-
-    if let Ok(entries) = std::fs::read_dir(dir.any_path()) {
-        names = entries
-            .flatten()
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-            .filter_map(|entry| entry.file_name().into_string().ok())
-            .filter(|name| CONFIG_FILE_NAMES.contains(&name.to_ascii_lowercase().as_str()))
-            .collect::<Vec<_>>();
-
-        names.sort();
-    }
-
-    names.into_iter().map(|name| dir.join(name)).collect()
+    list_files(dir, |name| {
+        CONFIG_FILE_NAMES.contains(&name.to_ascii_lowercase().as_str())
+    })
 }
+
+/// Does a directory directly contain a solution file (*.sln / *.slnx)?
+pub fn has_solution_file(dir: &VirtualPath) -> bool {
+    !list_files(dir, |name| has_extension(name, &["sln", "slnx"])).is_empty()
+}
+
+/// How far below a dependencies root to look for a lock file. Lock files sit
+/// next to each project file rather than at the root, and .NET repositories
+/// conventionally nest them a few levels down (`src/<area>/<project>/`).
+pub const LOCKFILE_SEARCH_DEPTH: u8 = 5;
 
 /// Depth-limited search for any NuGet lock file under a directory.
 /// Lock files live next to each project file, not at the dependencies root,
 /// so a root-only check would miss them.
 pub fn contains_lockfile(dir: &VirtualPath, depth: u8) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir.any_path()) else {
-        return false;
-    };
-
-    let mut subdirs = vec![];
-
-    for entry in entries.flatten() {
-        let Ok(name) = entry.file_name().into_string() else {
-            continue;
-        };
-
-        let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
-
-        if !is_dir {
-            if is_lock_file_name(&name) {
-                return true;
-            }
-        } else if depth > 0
-            && !SKIP_DIRS
-                .iter()
-                .any(|skip| skip.eq_ignore_ascii_case(&name))
-        {
-            subdirs.push(name);
-        }
+    if !find_lock_files(dir).is_empty() {
+        return true;
     }
 
-    subdirs
+    if depth == 0 {
+        return false;
+    }
+
+    list_dirs(dir)
         .into_iter()
+        .filter(|name| !SKIP_DIRS.iter().any(|skip| skip.eq_ignore_ascii_case(name)))
         .any(|name| contains_lockfile(&dir.join(name), depth - 1))
+}
+
+/// SDK versions laid out under a .NET root (`<root>/sdk/<version>`).
+pub fn installed_sdk_versions(root: &VirtualPath) -> Vec<String> {
+    list_dirs(&root.join("sdk"))
 }
 
 /// Directories from `start` up to and including `workspace_root`.
@@ -146,9 +150,7 @@ pub fn contains_lockfile(dir: &VirtualPath, depth: u8) -> bool {
 /// `global.json` or `dotnet-tools.json` discovery could escape into `$HOME` or a
 /// parent repository and pick up a file that governs nothing here. The bound
 /// matters most for `VirtualPath::Real`, whose `parent()` keeps yielding host
-/// directories all the way to the filesystem root. (`starbase_utils::fs::
-/// find_upwards_until` is not an option either — it takes `Path`, not
-/// `VirtualPath`.)
+/// directories all the way to the filesystem root.
 ///
 /// Stops early if `start` is not under `workspace_root`, once `parent()` runs
 /// out.
@@ -169,19 +171,5 @@ pub fn walk_up(
         };
 
         Some(dir)
-    })
-}
-
-/// Does a directory directly contain a solution file (*.sln / *.slnx)?
-pub fn has_solution_file(dir: &VirtualPath) -> bool {
-    std::fs::read_dir(dir.any_path()).is_ok_and(|entries| {
-        entries
-            .flatten()
-            .filter_map(|entry| entry.file_name().into_string().ok())
-            .any(|name| {
-                name.rsplit_once('.').is_some_and(|(_, ext)| {
-                    ext.eq_ignore_ascii_case("sln") || ext.eq_ignore_ascii_case("slnx")
-                })
-            })
     })
 }
