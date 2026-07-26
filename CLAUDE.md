@@ -42,6 +42,14 @@ it deliberately; it is the compatibility contract the release is verified agains
 after all gates pass does it publish the ghcr.io OCI artifact and create the GitHub
 release (with `immutableCreate`, so assets are locked after creation).
 
+Known defect in the published assets: the `dotnet_toolchain.wasm.sha256` uploaded
+alongside the wasm does **not** match the wasm. Verified on v0.1.0, v0.2.0 and
+v0.3.0/v0.3.1, so it predates any of our workflow changes — `build-wasm-plugin`
+evidently checksums a different artifact than the one it leaves in `builds/`.
+moon does not verify it (the cached plugin matches the wasm bytes exactly), so
+nothing is broken today, but anyone verifying a download by hand will fail. Fix
+by computing the checksum ourselves in `release.yml` before the upload step.
+
 Guarantees:
 
 - A commit that fails tests cannot be released, even if tagged.
@@ -73,6 +81,11 @@ toolchain, `cargo build` on it is worth running before a release.
 - moon 2.4.x introduced no toolchain WASM API changes (2.4.0 added built-in
   Poetry/Ruby toolchains only); the plugin runs unmodified on 2.0–2.4.
 - `inheritAliases` is a moon-level per-toolchain setting, not one of ours.
+- A `file://` plugin locator in `.moon/toolchains.yml` resolves relative to the
+  `.moon` directory, **not** the workspace root — `file://../../x.wasm` from a repo
+  root, not `file://../x.wasm`. A wrong path fails loudly
+  (`plugin::loader::file::missing`), but the error prints the joined path, which
+  reads oddly (`<workspace>/.moon/../x.wasm`).
 
 ## Test harness facts (verified against vendored sources)
 
