@@ -106,6 +106,27 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # `build-wasm-plugin` emits a .sha256 that does not match the wasm it
+      # leaves in builds/, so anyone verifying a downloaded asset by hand fails
+      # (see #2). Recompute it from the exact file we are about to upload.
+      # Deliberately unconditional: on a workflow_dispatch dry-run this operates
+      # on the verify pass output, which keeps the step itself exercised.
+      - name: Recompute wasm checksums
+        run: |
+          shopt -s nullglob
+          found=0
+          for wasm in builds/*.wasm; do
+            found=1
+            # Bare hash, no trailing newline — same shape the action produced,
+            # so this changes the value without changing the file format.
+            printf '%s' "$(sha256sum "$wasm" | cut -d' ' -f1)" > "${wasm}.sha256"
+            echo "$(basename "${wasm}.sha256") = $(cat "${wasm}.sha256")"
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::No builds/*.wasm found, so no checksum was written"
+            exit 1
+          fi
+
       - if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
         uses: ncipollo/release-action@v1
         with:
