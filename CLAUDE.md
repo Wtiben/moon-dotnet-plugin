@@ -42,13 +42,15 @@ it deliberately; it is the compatibility contract the release is verified agains
 after all gates pass does it publish the ghcr.io OCI artifact and create the GitHub
 release (with `immutableCreate`, so assets are locked after creation).
 
-Known defect in the published assets: the `dotnet_toolchain.wasm.sha256` uploaded
-alongside the wasm does **not** match the wasm. Verified on v0.1.0, v0.2.0 and
-v0.3.0/v0.3.1, so it predates any of our workflow changes — `build-wasm-plugin`
-evidently checksums a different artifact than the one it leaves in `builds/`.
-moon does not verify it (the cached plugin matches the wasm bytes exactly), so
-nothing is broken today, but anyone verifying a download by hand will fail. Fix
-by computing the checksum ourselves in `release.yml` before the upload step.
+The "Recompute wasm checksums" step in `release.yml` is load-bearing, not
+belt-and-braces: `build-wasm-plugin` emits a `dotnet_toolchain.wasm.sha256` that
+does not match the wasm sitting next to it in `builds/`, so without that step
+every release ships a checksum that fails verification (#2). Don't drop the step
+on the assumption the action got fixed — verify against a published asset first.
+
+The wasm itself has always been fine. It matches its ghcr OCI layer byte for
+byte, and moon never reads the `.sha256`, which is why this went unnoticed until
+someone verified a download by hand.
 
 Guarantees:
 
