@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+#### 🚀 Updates
+
+- New `msbuildProperties` setting: additional MSBuild properties applied to every
+  evaluation behind dependency and task inference, as `-p:NAME=VALUE`. Use it to
+  evaluate the graph the way the code actually deploys — e.g. conditional,
+  codegen-only `ProjectReference`s (`ReferenceOutputAssembly=false`, gated on a
+  property like `SkipApiClientGen`) no longer add build-ordering edges the
+  deployed build never compiles. The properties are part of the eval-cache
+  digest, and inferred task commands do not pass them (evaluation-time only).
+
 ## 0.1.0
 
 #### 🚀 Updates
