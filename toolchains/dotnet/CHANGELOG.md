@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 #### 🚀 Updates
 
@@ -11,6 +11,11 @@
   property like `SkipApiClientGen`) no longer add build-ordering edges the
   deployed build never compiles. The properties are part of the eval-cache
   digest, and inferred task commands do not pass them (evaluation-time only).
+
+#### 🐞 Fixes
+
+- The `dotnet_toolchain.wasm.sha256` published with each release now matches the
+  wasm it is published alongside. The wasm itself was never affected.
 
 ## 0.1.0
 
