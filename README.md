@@ -98,6 +98,7 @@ All settings live under `dotnet:` in `.moon/toolchains.yml`.
 | `inferTasks` | bool \| list | `true` | Infer `build`/`test`/`run`/`publish`. A list infers only the named tasks. |
 | `restoreArgs` | list | `[]` | Extra arguments appended to `dotnet restore`. |
 | `dotnetRoot` | string | — | Explicit `DOTNET_ROOT` for task environments. Falls back to an existing `DOTNET_ROOT`, then `~/.dotnet` when it holds a `dotnet` executable. |
+| `msbuildProperties` | map | `{}` | MSBuild properties passed as `-p:NAME=VALUE` to every evaluation behind inference. See [Evaluation properties](#evaluation-properties). |
 | `inheritAliases` | bool | `true` | moon-level setting; set to `false` to stop `AssemblyName` aliases from being registered. |
 
 ```yaml
@@ -107,6 +108,42 @@ dotnet:
   inferTasks: ['build', 'test']
   restoreArgs: ['--no-cache']
 ```
+
+## Evaluation properties
+
+Inference evaluates each project with the SDK's default property values. When a
+reference or package is behind a condition, that default decides whether it lands
+in the graph:
+
+```xml
+<ProjectReference Include="..\Client\Client.csproj"
+                  ReferenceOutputAssembly="false"
+                  Condition="'$(SkipApiClientGen)' != 'true'" />
+```
+
+Nothing sets `SkipApiClientGen`, so the condition is true and the edge is inferred
+— even in a workspace whose real builds always set it. `msbuildProperties` lets
+you evaluate the graph the way the code is actually built:
+
+```yaml
+dotnet:
+  msbuildProperties:
+    SkipApiClientGen: 'true'
+```
+
+These are command-line global properties, so they override values a project sets
+itself, and they apply to both batched and per-project evaluation. Changing them
+invalidates the evaluation cache.
+
+Two things to keep in mind:
+
+- **Keep them consistent with how you build.** Inferred `build` tasks pass
+  `--no-dependencies`, so moon is the only thing ordering dependencies. Dropping
+  an edge here drops that ordering, which is correct only if your real build
+  also skips the work behind it.
+- **They apply to evaluation, not to `dotnet restore` or task commands.** A
+  `PackageReference` gated on one of these properties is resolved for hashing but
+  not for restore, so the two can disagree. Avoid gating packages on them.
 
 ## Task inference
 

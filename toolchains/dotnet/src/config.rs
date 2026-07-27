@@ -1,5 +1,6 @@
 use moon_pdk_api::config_struct;
 use schematic::{Config, Schematic};
+use std::collections::BTreeMap;
 
 /// The task names the plugin can infer.
 pub const INFERABLE_TASKS: &[&str] = &["build", "test", "run", "publish"];
@@ -140,9 +141,21 @@ config_struct!(
         ///     SkipApiClientGen: 'true'
         /// ```
         ///
-        /// These are evaluation-time only: inferred task commands do not pass
-        /// them, so `moon run` builds stay exactly what the project defines.
-        pub msbuild_properties: std::collections::BTreeMap<String, String>,
+        /// These are evaluation-time only, and the boundary is deliberate:
+        /// neither inferred task commands nor `dotnet restore` pass them, so
+        /// `moon run` builds stay exactly what the project defines. Two
+        /// consequences worth knowing:
+        ///
+        /// - Keep these consistent with how the code is actually built. Setting
+        ///   a property here that your real build does not set makes the graph
+        ///   describe a build nobody runs. Inferred `build` tasks pass
+        ///   `--no-dependencies`, so moon is the only thing ordering
+        ///   dependencies: dropping an edge here drops that ordering too.
+        /// - A `PackageReference` gated on one of these properties is resolved
+        ///   for hashing but not for restore, so the recorded package set can
+        ///   differ from what restore installs. Harmless when the properties
+        ///   match the build; a reason not to gate packages on them otherwise.
+        pub msbuild_properties: BTreeMap<String, String>,
     }
 );
 
@@ -195,7 +208,10 @@ mod tests {
             config.msbuild_properties.get("SkipApiClientGen"),
             Some(&"true".to_owned())
         );
-        assert_eq!(config.msbuild_properties.get("Answer"), Some(&"42".to_owned()));
+        assert_eq!(
+            config.msbuild_properties.get("Answer"),
+            Some(&"42".to_owned())
+        );
     }
 
     #[test]

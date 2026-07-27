@@ -419,7 +419,9 @@ fn with_eval_env(
     mut input: moon_pdk_api::ExecCommandInput,
     env: &EvalEnv,
 ) -> moon_pdk_api::ExecCommandInput {
-    input.args.extend(msbuild_property_args(&env.msbuild_properties));
+    input
+        .args
+        .extend(msbuild_property_args(&env.msbuild_properties));
 
     if let Some(root) = &env.dotnet_root {
         input.env.insert("DOTNET_ROOT".into(), root.clone());
