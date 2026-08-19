@@ -33,7 +33,31 @@ mod dotnet_toolchain_tier2 {
                 .await;
 
             assert_eq!(output.root.unwrap(), VirtualPath::new("/workspace"));
-            assert!(output.members.is_none());
+            assert_eq!(output.members, Some(vec!["**".to_string()]));
+        }
+
+        // Regression: moon reads `members` to decide which projects belong to the
+        // located root's dependencies workspace. A `None` here declares the root
+        // path as the only member, so every project *below* a solution root counts
+        // as neither root nor member, and moon skips `install_dependencies` and
+        // `setup_environment` for it entirely — nothing gets restored, and the
+        // inferred `build --no-restore` then fails on a missing assets file.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn claims_every_project_below_the_root_as_a_member() {
+            let sandbox = create_moon_sandbox("locate");
+            let plugin = sandbox.create_toolchain("dotnet").await;
+
+            let output = plugin
+                .locate_dependencies_root(LocateDependenciesRootInput {
+                    starting_dir: VirtualPath::new(sandbox.path().join("nested/proj")),
+                    ..Default::default()
+                })
+                .await;
+
+            // The root is above the project that asked, so the project only takes
+            // part in that restore by matching a member glob.
+            assert_eq!(output.root.unwrap(), VirtualPath::new("/workspace"));
+            assert_eq!(output.members, Some(vec!["**".to_string()]));
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -71,7 +95,7 @@ mod dotnet_toolchain_tier2 {
                 .await;
 
             assert_eq!(output.root.unwrap(), VirtualPath::new("/workspace"));
-            assert!(output.members.is_none());
+            assert_eq!(output.members, Some(vec!["**".to_string()]));
         }
 
         #[tokio::test(flavor = "multi_thread")]

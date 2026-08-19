@@ -51,8 +51,18 @@ pub fn locate_dependencies_root(
         }
     }
 
-    // Single dependencies root for v1; no member globs.
-    output.members = None;
+    // Every project under the located root belongs to that root's dependencies
+    // workspace, because `install_dependencies` runs one `dotnet restore` there
+    // that covers the whole tree beneath it.
+    //
+    // This is load-bearing on moon 2.5+: `members: None` declares that the root
+    // path is the *only* member, so a project below it is neither the root nor a
+    // member, and moon then skips both `install_dependencies` and
+    // `setup_environment` for it. For the ordinary .NET layout — one solution at
+    // the repository root, no per-project lock files — that means nothing is ever
+    // restored, and the inferred `build --no-restore` fails on the missing assets
+    // file.
+    output.members = Some(vec!["**".into()]);
 
     Ok(Json(output))
 }
