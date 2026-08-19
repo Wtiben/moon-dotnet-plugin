@@ -6,8 +6,8 @@ use crate::dotnet_install::{
 use crate::global_json::{parse_sdk_requirement, satisfies};
 use extism_pdk::*;
 use moon_pdk::{
-    HostLogInput, HostLogTarget, exec, fetch_text, get_host_environment, host_log,
-    into_virtual_path, parse_toolchain_config, plugin_err,
+    HostLogInput, HostLogTarget, VirtualPathExt, exec, fetch_text, get_host_environment, host_log,
+    parse_toolchain_config, plugin_err,
 };
 use moon_pdk_api::*;
 use starbase_utils::fs;
@@ -21,7 +21,7 @@ extern "ExtismHost" {
 /// environments, setup has no project to walk up from — and the pin often
 /// lives in a subtree (`src/backend/global.json`) rather than at the root.
 fn collect_global_json_files(dir: &VirtualPath, depth: u8, out: &mut Vec<VirtualPath>) {
-    let Ok(entries) = fs::read_dir(dir.any_path()) else {
+    let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
 
@@ -120,13 +120,13 @@ pub fn setup_toolchain(
     let install_root: std::path::PathBuf = match &config.dotnet_root {
         Some(root) => root.into(),
         None => {
-            let Some(home) = env.home_dir.real_path() else {
+            let Some(home) = env.home_dir.to_real_path()? else {
                 return Err(plugin_err!(
                     "Unable to resolve the host home directory for the default `~/.dotnet` install root."
                 ));
             };
 
-            home.join(".dotnet")
+            home.join(".dotnet").to_path_buf()
         }
     };
 
@@ -139,11 +139,11 @@ pub fn setup_toolchain(
     // is already laid out. Channels/aliases resolve server-side, so the
     // install script decides for those (it skips re-installs itself).
     if let Some(version) = exact_version(spec)
-        && into_virtual_path(install_root.join("sdk").join(&version))?.exists()
+        && VirtualPath::create(install_root.join("sdk").join(&version))?.exists()
     {
         warn_on_unsatisfied_pins(
             &input.context.workspace_root,
-            &into_virtual_path(&install_root)?,
+            &VirtualPath::create(&install_root)?,
         )?;
 
         return Ok(Json(output));
@@ -170,7 +170,7 @@ pub fn setup_toolchain(
         fs::write_file(&script_file, fetch_text(install_script_url(windows))?)?;
     }
 
-    let Some(script_path) = script_file.real_path() else {
+    let Some(script_path) = script_file.to_real_path()? else {
         return Err(plugin_err!(
             "Unable to resolve a host path for the staged install script."
         ));
@@ -228,7 +228,7 @@ pub fn setup_toolchain(
 
     warn_on_unsatisfied_pins(
         &input.context.workspace_root,
-        &into_virtual_path(&install_root)?,
+        &VirtualPath::create(&install_root)?,
     )?;
 
     // Informational only: for WASM-only toolchains the host currently

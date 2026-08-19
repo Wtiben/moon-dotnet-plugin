@@ -10,7 +10,7 @@ use crate::tier2_env::build_eval_env;
 use extism_pdk::*;
 use moon_config::{UnresolvedVersionSpec, VersionSpec};
 use moon_pdk::{
-    HostLogInput, HostLogTarget, command_exists, get_host_environment, host_log,
+    HostLogInput, HostLogTarget, VirtualPathExt, command_exists, get_host_environment, host_log,
     is_project_toolchain_enabled, parse_toolchain_config,
 };
 use moon_pdk_api::*;
@@ -32,7 +32,7 @@ pub fn locate_dependencies_root(
     // Nearest solution file wins.
     for dir in walk_up(&input.starting_dir, workspace_root) {
         if has_solution_file(&dir) {
-            output.root = dir.virtual_path();
+            output.root = Some(dir);
             break;
         }
     }
@@ -45,7 +45,7 @@ pub fn locate_dependencies_root(
 
         for dir in walk_up(&input.starting_dir, workspace_root) {
             if !probe(&dir).is_empty() {
-                output.root = dir.virtual_path();
+                output.root = Some(dir);
                 break;
             }
         }
@@ -134,7 +134,7 @@ pub fn parse_manifest(
 ) -> FnResult<Json<ParseManifestOutput>> {
     let mut output = ParseManifestOutput::default();
 
-    let Some(real_path) = input.path.real_path() else {
+    let Some(real_path) = input.path.to_real_path()? else {
         return Ok(Json(output));
     };
 
@@ -142,7 +142,7 @@ pub fn parse_manifest(
 
     // Degrade silently like hash_task_contents: a missing dotnet must not
     // fail moon's install fingerprinting.
-    if !command_exists(&env, "dotnet") {
+    if !command_exists(env, "dotnet") {
         return Ok(Json(output));
     }
 
@@ -245,12 +245,7 @@ pub fn hash_task_contents(
 
     for dir in walk_up(&project_root, workspace_root) {
         for file in find_config_files(&dir) {
-            let key = file
-                .virtual_path()
-                .map(|path| path.to_string_lossy().to_string())
-                .unwrap_or_else(|| file.to_string());
-
-            configs.insert(key, fs::read_file(&file)?);
+            configs.insert(file.to_string(), fs::read_file(&file)?);
         }
     }
 
@@ -263,12 +258,7 @@ pub fn hash_task_contents(
         let mut lockfiles: BTreeMap<String, String> = BTreeMap::new();
 
         for file in &lock_files {
-            let key = file
-                .virtual_path()
-                .map(|path| path.to_string_lossy().to_string())
-                .unwrap_or_else(|| file.to_string());
-
-            lockfiles.insert(key, fs::read_file(file)?);
+            lockfiles.insert(file.to_string(), fs::read_file(file)?);
         }
 
         output.contents.push(json::json!({
@@ -307,13 +297,13 @@ pub fn hash_task_contents(
         let mut evaluated_all = false;
         let env = get_host_environment()?;
 
-        if command_exists(&env, "dotnet") {
+        if command_exists(env, "dotnet") {
             let eval_env = build_eval_env(&config, project_root.clone(), workspace_root)?;
 
             evaluated_all = true;
 
             for file in find_project_files(&project_root) {
-                let Some(real_path) = file.real_path() else {
+                let Some(real_path) = file.to_real_path()? else {
                     evaluated_all = false;
                     continue;
                 };

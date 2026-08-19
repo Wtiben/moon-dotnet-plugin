@@ -50,7 +50,7 @@ fn has_extension(name: &str, extensions: &[&str]) -> bool {
 /// only absorbs real I/O failures — permissions, symlink loops, WASI
 /// `NotCapable`.
 fn list_files(dir: &VirtualPath, keep: impl Fn(&str) -> bool) -> Vec<VirtualPath> {
-    let Ok(entries) = fs::read_dir(dir.any_path()) else {
+    let Ok(entries) = fs::read_dir(dir) else {
         return vec![];
     };
 
@@ -69,7 +69,7 @@ fn list_files(dir: &VirtualPath, keep: impl Fn(&str) -> bool) -> Vec<VirtualPath
 /// Names of the subdirectories directly inside a directory. Same
 /// unreadable-yields-nothing contract as [`list_files`].
 fn list_dirs(dir: &VirtualPath) -> Vec<String> {
-    let Ok(entries) = fs::read_dir(dir.any_path()) else {
+    let Ok(entries) = fs::read_dir(dir) else {
         return vec![];
     };
 
@@ -148,9 +148,9 @@ pub fn installed_sdk_versions(root: &VirtualPath) -> Vec<String> {
 /// Every upward search in this plugin is bounded by the workspace root, which is
 /// why moon's own `locate_root*` helpers are not used: they are unbounded, so
 /// `global.json` or `dotnet-tools.json` discovery could escape into `$HOME` or a
-/// parent repository and pick up a file that governs nothing here. The bound
-/// matters most for `VirtualPath::Real`, whose `parent()` keeps yielding host
-/// directories all the way to the filesystem root.
+/// parent repository and pick up a file that governs nothing here. `VirtualPath`
+/// gives no such bound of its own: `parent()` keeps yielding directories all the
+/// way to the filesystem root.
 ///
 /// Stops early if `start` is not under `workspace_root`, once `parent()` runs
 /// out.
@@ -158,17 +158,13 @@ pub fn walk_up(
     start: &VirtualPath,
     workspace_root: &VirtualPath,
 ) -> impl Iterator<Item = VirtualPath> {
-    let root = workspace_root.any_path().to_owned();
+    let root = workspace_root.to_owned();
     let mut next = Some(start.to_owned());
 
     std::iter::from_fn(move || {
         let dir = next.take()?;
 
-        next = if dir.any_path() == &root {
-            None
-        } else {
-            dir.parent()
-        };
+        next = if dir == root { None } else { dir.parent() };
 
         Some(dir)
     })

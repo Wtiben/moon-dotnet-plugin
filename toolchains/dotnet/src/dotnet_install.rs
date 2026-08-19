@@ -25,7 +25,7 @@ pub fn install_script_file_name(windows: bool) -> &'static str {
 /// aliases resolve server-side, so only fully-qualified versions qualify.
 pub fn exact_version(spec: &UnresolvedVersionSpec) -> Option<String> {
     match spec {
-        UnresolvedVersionSpec::Semantic(version) => Some(version.to_string()),
+        UnresolvedVersionSpec::Version(version) => Some(version.to_string()),
         _ => None,
     }
 }
@@ -49,7 +49,7 @@ pub fn install_version_args(
     };
 
     match spec {
-        UnresolvedVersionSpec::Semantic(version) => {
+        UnresolvedVersionSpec::Version(version) => {
             Ok(vec![version_flag.into(), version.to_string()])
         }
         UnresolvedVersionSpec::Alias(alias) => {
@@ -63,15 +63,16 @@ pub fn install_version_args(
 
             Ok(vec![channel_flag.into(), channel.into()])
         }
-        UnresolvedVersionSpec::Req(req) => {
-            let Some(comparator) = req.comparators.first() else {
+        UnresolvedVersionSpec::Requirement(req) => {
+            // A `None` major is a wildcard, which has no channel to map onto.
+            let Some(major) = req.major else {
                 return Err(unsupported(req));
             };
 
             // dotnet-install channels are `major.minor` feature bands.
             Ok(vec![
                 channel_flag.into(),
-                format!("{}.{}", comparator.major, comparator.minor.unwrap_or(0)),
+                format!("{}.{}", major, req.minor.unwrap_or(0)),
             ])
         }
         other => Err(unsupported(other)),

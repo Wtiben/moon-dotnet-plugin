@@ -19,7 +19,7 @@ use crate::tier2_env::{
 use extism_pdk::*;
 use moon_config::DependencyScope;
 use moon_pdk::{
-    HostLogInput, HostLogTarget, command_exists, get_host_environment, host_log,
+    HostLogInput, HostLogTarget, VirtualPathExt, command_exists, get_host_environment, host_log,
     parse_toolchain_config, plugin_err,
 };
 use moon_pdk_api::*;
@@ -49,7 +49,7 @@ struct ProjectIndexes {
 }
 
 /// Pass 1: locate every project's MSBuild files and index them.
-fn build_project_indexes(input: &ExtendProjectGraphInput) -> ProjectIndexes {
+fn build_project_indexes(input: &ExtendProjectGraphInput) -> AnyResult<ProjectIndexes> {
     let mut indexes = ProjectIndexes {
         files: BTreeMap::new(),
         by_real_path: BTreeMap::new(),
@@ -66,7 +66,7 @@ fn build_project_indexes(input: &ExtendProjectGraphInput) -> ProjectIndexes {
         }
 
         for file in &files {
-            if let Some(real) = file.real_path() {
+            if let Some(real) = file.to_real_path()? {
                 indexes
                     .by_real_path
                     .insert(normalize_path_key(&real.to_string_lossy()), id.to_owned());
@@ -91,7 +91,7 @@ fn build_project_indexes(input: &ExtendProjectGraphInput) -> ProjectIndexes {
         indexes.files.insert(id.to_owned(), files);
     }
 
-    indexes
+    Ok(indexes)
 }
 
 /// Resolve a `ProjectReference` path to the moon project that owns it: exact
@@ -184,12 +184,13 @@ fn run_batch_evaluation(
     indexes: &ProjectIndexes,
     eval_env: &EvalEnv,
 ) -> FnResult<Option<BTreeMap<String, MsbuildEvaluation>>> {
-    let all_project_paths = indexes
-        .files
-        .values()
-        .flatten()
-        .filter_map(|file| file.real_path())
-        .collect::<Vec<_>>();
+    let mut all_project_paths = vec![];
+
+    for file in indexes.files.values().flatten() {
+        if let Some(real) = file.to_real_path()? {
+            all_project_paths.push(real.to_path_buf());
+        }
+    }
 
     match evaluate_projects_batch(&input.context.workspace_root, &all_project_paths, eval_env) {
         Ok(results) => Ok(Some(results)),
@@ -288,7 +289,7 @@ struct ProjectEvaluation {
     complete: bool,
 
     /// Project files to report to moon as graph inputs.
-    input_files: Vec<std::path::PathBuf>,
+    input_files: Vec<VirtualPath>,
 }
 
 /// Pass 3, for one project: map its `ProjectReference` items onto moon project
@@ -310,7 +311,7 @@ fn extend_one_project(
     let mut seen_deps: BTreeSet<Id> = BTreeSet::new();
 
     for file in files {
-        let Some(real_path) = file.real_path() else {
+        let Some(real_path) = file.to_real_path()? else {
             result.complete = false;
             continue;
         };
@@ -431,9 +432,7 @@ fn extend_one_project(
             }
         }
 
-        if let Some(virtual_file) = file.virtual_path() {
-            result.input_files.push(virtual_file);
-        }
+        result.input_files.push(file.clone());
     }
 
     Ok(result)
@@ -455,7 +454,7 @@ pub fn extend_project_graph(
         return Ok(Json(output));
     }
 
-    let indexes = build_project_indexes(&input);
+    let indexes = build_project_indexes(&input)?;
 
     if indexes.files.is_empty() {
         return Ok(Json(output));
@@ -467,7 +466,7 @@ pub fn extend_project_graph(
     // machine — erroring here would fail the whole-workspace graph, for every
     // toolchain, before moon ever gets to install the SDK it was told to
     // install.
-    if !command_exists(&get_host_environment()?, "dotnet") {
+    if !command_exists(get_host_environment()?, "dotnet") {
         host_log!(
             warn,
             "No <symbol>dotnet</symbol> executable found on PATH, skipping .NET project graph evaluation — no dependency edges or inferred tasks will be contributed. Install a .NET 8+ SDK, or set <property>version</property> in <file>.moon/toolchains.yml</file> to have moon install one."
@@ -488,7 +487,7 @@ pub fn extend_project_graph(
     let workspace_dir = input
         .context
         .workspace_root
-        .real_path()
+        .to_real_path()?
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_default();
 

@@ -68,7 +68,7 @@ fn applies_to_dotnet(scope: Option<&InheritedByScope>) -> bool {
 }
 
 fn collect_yaml_files(dir: &VirtualPath, out: &mut Vec<VirtualPath>) {
-    if let Ok(entries) = fs::read_dir(dir.any_path()) {
+    if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries {
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
@@ -102,7 +102,7 @@ pub fn load_inherited_task_ids(workspace_root: &VirtualPath) -> BTreeMap<String,
 
         // An unparseable file is moon's problem to report; there is nothing
         // for inference to yield to.
-        if let Ok(parsed) = yaml::read_file::<InheritedTasksFile>(file.any_path())
+        if let Ok(parsed) = yaml::read_file::<InheritedTasksFile>(&file)
             && applies_to_dotnet(parsed.inherited_by.as_ref())
         {
             let label = file.to_string();

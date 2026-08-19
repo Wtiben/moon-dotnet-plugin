@@ -7,13 +7,12 @@
 
 use crate::config::DotnetToolchainConfig;
 use crate::discovery::{installed_sdk_versions, walk_up};
-use crate::eval_cache::content_digest;
 use crate::global_json::{SdkRequirement, parse_sdk_requirement, satisfies, selects_test_platform};
 use crate::msbuild::EvalEnv;
 use extism_pdk::*;
 use moon_pdk::{
-    HostLogInput, HostLogTarget, command_exists, get_host_env_var, get_host_environment, host_log,
-    into_virtual_path, parse_toolchain_config,
+    HostLogInput, HostLogTarget, VirtualPathExt, command_exists, get_host_env_var,
+    get_host_environment, host_log, parse_toolchain_config,
 };
 use moon_pdk_api::*;
 use starbase_utils::{fs, yaml};
@@ -41,7 +40,7 @@ pub fn sdk_install_configured(workspace_root: &VirtualPath) -> bool {
 
     // Untyped: `version` may be a string (`'8.0'`), a bare YAML float (`8.0`) or
     // an alias (`lts`), and only its presence matters here.
-    yaml::read_file::<serde_json::Value>(file.any_path())
+    yaml::read_file::<serde_json::Value>(file)
         .ok()
         .and_then(|root| {
             root.get("dotnet")
@@ -149,7 +148,7 @@ fn resolve_dotnet_root(
     }
 
     if let Some(scope) = scope
-        && command_exists(&env, "dotnet")
+        && command_exists(env, "dotnet")
         && let Some((file, requirement)) = find_sdk_requirement(scope.start, scope.workspace_root)
     {
         let installed = installed_sdk_versions(&candidate);
@@ -171,7 +170,7 @@ fn resolve_dotnet_root(
         }
     }
 
-    if let Some(real) = candidate.real_path() {
+    if let Some(real) = candidate.to_real_path()? {
         let root = real.to_string_lossy().to_string();
 
         host_log!(
@@ -215,7 +214,7 @@ pub fn build_eval_env(
         };
         let real = std::path::PathBuf::from(root).join(exe);
 
-        into_virtual_path(&real)
+        VirtualPath::create(&real)
             .ok()?
             .exists()
             // The host converts a command containing a separator back from
@@ -291,17 +290,13 @@ pub fn setup_environment(
             ExecCommandInput::new("dotnet", ["tool", "restore"]).cwd(input.root.clone()),
         );
 
+        // The label has to stay stable: it *is* the on-disk cache key
+        // (`<prefix>:<label>`). What re-runs the restore is the fingerprint
+        // stored under that key, and `inputs` is what puts the manifest's
+        // content hash into it — so a manifest edit re-restores, while an
+        // unrelated re-run of the action does not.
         command.label = Some("dotnet tool restore".into());
-
-        // The cache key carries a digest of the manifest content, because
-        // moon fingerprints this action on the *declaration* we return here
-        // and skips it wholesale when unchanged — a stable key would mean a
-        // manifest edit never re-runs the restore. `inputs` then prevents
-        // re-execution when the action runs again for unrelated reasons.
-        command.cache = Some(format!(
-            "dotnet-tool-restore-{}",
-            content_digest(&fs::read_file(&tool_manifest)?)
-        ));
+        command.cache = Some(CacheStrategy::Hash);
         command.inputs.push(CacheInput::FileHash(tool_manifest));
 
         output.commands.push(command);

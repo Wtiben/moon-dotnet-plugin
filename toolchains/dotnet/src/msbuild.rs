@@ -425,9 +425,7 @@ fn with_eval_env(
 
     if let Some(root) = &env.dotnet_root {
         input.env.insert("DOTNET_ROOT".into(), root.clone());
-        input
-            .paths
-            .push(moon_pdk_api::VirtualPath::Real(root.into()));
+        input.paths.push(std::path::PathBuf::from(root));
     }
 
     // Only an explicit executable path redirects which SDK evaluates; see
@@ -453,7 +451,7 @@ pub fn evaluate_projects_batch(
     project_real_paths: &[std::path::PathBuf],
     eval_env: &EvalEnv,
 ) -> AnyResult<BTreeMap<String, MsbuildEvaluation>> {
-    use moon_pdk::exec;
+    use moon_pdk::{VirtualPathExt, exec};
     use moon_pdk_api::{ExecCommandInput, anyhow};
     use starbase_utils::fs;
 
@@ -477,7 +475,7 @@ pub fn evaluate_projects_batch(
     let traversal = dir.join("traversal.proj");
 
     let traversal_arg = traversal
-        .real_path()
+        .to_real_path()?
         .ok_or_else(|| anyhow!("no host-real path for {traversal:?}"))?
         .to_string_lossy()
         .to_string();

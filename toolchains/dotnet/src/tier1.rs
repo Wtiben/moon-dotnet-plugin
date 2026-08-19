@@ -106,9 +106,7 @@ pub fn prune_docker(Json(input): Json<PruneDockerInput>) -> FnResult<Json<PruneD
             if dir.exists() {
                 fs::remove_dir_all(&dir)?;
 
-                if let Some(file) = dir.virtual_path() {
-                    output.changed_files.push(file);
-                }
+                output.changed_files.push(dir);
             }
         }
     }

@@ -1,7 +1,6 @@
 use moon_pdk_api::*;
 use moon_pdk_test_utils::create_empty_moon_sandbox;
 use serde_json::json;
-use std::path::PathBuf;
 
 mod dotnet_toolchain_tier1 {
     use super::*;
@@ -111,7 +110,7 @@ mod dotnet_toolchain_tier1 {
                         source: "app".into(),
                         ..Default::default()
                     }],
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    root: VirtualPath::new(sandbox.path()),
                     ..Default::default()
                 })
                 .await;
@@ -123,8 +122,8 @@ mod dotnet_toolchain_tier1 {
             assert_eq!(
                 output.changed_files,
                 vec![
-                    PathBuf::from("/workspace/app/bin"),
-                    PathBuf::from("/workspace/app/obj"),
+                    VirtualPath::new("/workspace/app/bin"),
+                    VirtualPath::new("/workspace/app/obj"),
                 ]
             );
         }
@@ -136,7 +135,7 @@ mod dotnet_toolchain_tier1 {
 
             let output = plugin
                 .prune_docker(PruneDockerInput {
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    root: VirtualPath::new(sandbox.path()),
                     ..Default::default()
                 })
                 .await;

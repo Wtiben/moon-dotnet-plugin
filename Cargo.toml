@@ -4,17 +4,17 @@ members = ["toolchains/*"]
 
 [workspace.dependencies]
 extism-pdk = "1.4.1"
-moon_common = "2.0.7"
-moon_config = "2.1.0"
-moon_pdk = "2.0.4"
-moon_pdk_api = "2.0.4"
-moon_pdk_test_utils = "2.0.4"
-moon_target = "3.0.0"
+moon_common = "2.0.8"
+moon_config = "2.1.1"
+moon_pdk = "2.1.0"
+moon_pdk_api = "2.1.2"
+moon_pdk_test_utils = "2.1.0"
+moon_target = "3.0.1"
 schematic = { version = "0.19.7", default-features = false, features = ["schema"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["preserve_order"] }
-starbase_sandbox = "0.11.0"
-starbase_utils = "0.13.6"
+starbase_sandbox = "0.12.0"
+starbase_utils = "0.14.2"
 tokio = { version = "1", features = ["full"] }
 
 [profile.release]

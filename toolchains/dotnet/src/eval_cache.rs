@@ -199,7 +199,7 @@ mod tests {
         );
 
         let sandbox = create_empty_sandbox();
-        let root = VirtualPath::Real(sandbox.path().into());
+        let root = VirtualPath::new(sandbox.path());
         let no_properties = BTreeMap::new();
 
         sandbox.create_file("Directory.Build.props", "<A/><B/>");
@@ -221,7 +221,7 @@ mod tests {
     #[test]
     fn msbuild_properties_invalidate_the_digest() {
         let sandbox = create_empty_sandbox();
-        let root = VirtualPath::Real(sandbox.path().into());
+        let root = VirtualPath::new(sandbox.path());
 
         sandbox.create_file("Directory.Build.props", "<A/>");
 

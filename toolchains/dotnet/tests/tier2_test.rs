@@ -13,7 +13,6 @@ use moon_config::DependencyScope;
 use moon_pdk_api::*;
 use moon_pdk_test_utils::{create_empty_moon_sandbox, create_moon_sandbox};
 use serde_json::json;
-use std::path::PathBuf;
 
 mod dotnet_toolchain_tier2 {
     use super::*;
@@ -28,12 +27,12 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .locate_dependencies_root(LocateDependenciesRootInput {
-                    starting_dir: VirtualPath::Real(sandbox.path().join("nested/proj")),
+                    starting_dir: VirtualPath::new(sandbox.path().join("nested/proj")),
                     ..Default::default()
                 })
                 .await;
 
-            assert_eq!(output.root.unwrap(), PathBuf::from("/workspace"));
+            assert_eq!(output.root.unwrap(), VirtualPath::new("/workspace"));
             assert!(output.members.is_none());
         }
 
@@ -44,12 +43,12 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .locate_dependencies_root(LocateDependenciesRootInput {
-                    starting_dir: VirtualPath::Real(sandbox.path().join("proj")),
+                    starting_dir: VirtualPath::new(sandbox.path().join("proj")),
                     ..Default::default()
                 })
                 .await;
 
-            assert_eq!(output.root.unwrap(), PathBuf::from("/workspace/proj"));
+            assert_eq!(output.root.unwrap(), VirtualPath::new("/workspace/proj"));
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -66,12 +65,12 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .locate_dependencies_root(LocateDependenciesRootInput {
-                    starting_dir: VirtualPath::Real(sandbox.path().join("nested/proj")),
+                    starting_dir: VirtualPath::new(sandbox.path().join("nested/proj")),
                     ..Default::default()
                 })
                 .await;
 
-            assert_eq!(output.root.unwrap(), PathBuf::from("/workspace"));
+            assert_eq!(output.root.unwrap(), VirtualPath::new("/workspace"));
             assert!(output.members.is_none());
         }
 
@@ -87,12 +86,12 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .locate_dependencies_root(LocateDependenciesRootInput {
-                    starting_dir: VirtualPath::Real(sandbox.path().join("proj")),
+                    starting_dir: VirtualPath::new(sandbox.path().join("proj")),
                     ..Default::default()
                 })
                 .await;
 
-            assert_eq!(output.root.unwrap(), PathBuf::from("/workspace/proj"));
+            assert_eq!(output.root.unwrap(), VirtualPath::new("/workspace/proj"));
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -104,7 +103,7 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .locate_dependencies_root(LocateDependenciesRootInput {
-                    starting_dir: VirtualPath::Real(sandbox.path().join("empty/dir")),
+                    starting_dir: VirtualPath::new(sandbox.path().join("empty/dir")),
                     ..Default::default()
                 })
                 .await;
@@ -159,7 +158,7 @@ mod dotnet_toolchain_tier2 {
             assert!(
                 output
                     .input_files
-                    .contains(&PathBuf::from("/workspace/app/App.csproj"))
+                    .contains(&VirtualPath::new("/workspace/app/App.csproj"))
             );
         }
 
@@ -376,12 +375,12 @@ mod dotnet_toolchain_tier2 {
             assert!(
                 output
                     .input_files
-                    .contains(&PathBuf::from("/workspace/lib/Lib.fsproj"))
+                    .contains(&VirtualPath::new("/workspace/lib/Lib.fsproj"))
             );
             assert!(
                 output
                     .input_files
-                    .contains(&PathBuf::from("/workspace/core/Core.vbproj"))
+                    .contains(&VirtualPath::new("/workspace/core/Core.vbproj"))
             );
         }
 
@@ -551,7 +550,7 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .install_dependencies(InstallDependenciesInput {
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    root: VirtualPath::new(sandbox.path()),
                     toolchain_config: json!({}),
                     ..Default::default()
                 })
@@ -570,7 +569,7 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .install_dependencies(InstallDependenciesInput {
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    root: VirtualPath::new(sandbox.path()),
                     toolchain_config: json!({}),
                     ..Default::default()
                 })
@@ -595,7 +594,7 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .install_dependencies(InstallDependenciesInput {
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    root: VirtualPath::new(sandbox.path()),
                     toolchain_config: json!({}),
                     ..Default::default()
                 })
@@ -615,7 +614,7 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .install_dependencies(InstallDependenciesInput {
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    root: VirtualPath::new(sandbox.path()),
                     toolchain_config: json!({ "restoreArgs": ["--verbosity", "minimal"] }),
                     ..Default::default()
                 })
@@ -643,8 +642,8 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .parse_lock(ParseLockInput {
-                    path: VirtualPath::Real(sandbox.path().join("proj/packages.lock.json")),
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    path: VirtualPath::new(sandbox.path().join("proj/packages.lock.json")),
+                    root: VirtualPath::new(sandbox.path()),
                     ..Default::default()
                 })
                 .await;
@@ -669,8 +668,8 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .parse_manifest(ParseManifestInput {
-                    path: VirtualPath::Real(sandbox.path().join("app-tests/App.Tests.csproj")),
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    path: VirtualPath::new(sandbox.path().join("app-tests/App.Tests.csproj")),
+                    root: VirtualPath::new(sandbox.path()),
                     ..Default::default()
                 })
                 .await;
@@ -702,8 +701,8 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .parse_manifest(ParseManifestInput {
-                    path: VirtualPath::Real(sandbox.path().join("proj/Cpm.csproj")),
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    path: VirtualPath::new(sandbox.path().join("proj/Cpm.csproj")),
+                    root: VirtualPath::new(sandbox.path()),
                     ..Default::default()
                 })
                 .await;
@@ -723,8 +722,8 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .parse_manifest(ParseManifestInput {
-                    path: VirtualPath::Real(sandbox.path().join("Directory.Packages.props")),
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    path: VirtualPath::new(sandbox.path().join("Directory.Packages.props")),
+                    root: VirtualPath::new(sandbox.path()),
                     ..Default::default()
                 })
                 .await;
@@ -752,7 +751,7 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .setup_environment(SetupEnvironmentInput {
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    root: VirtualPath::new(sandbox.path()),
                     toolchain_config: json!({}),
                     ..Default::default()
                 })
@@ -774,7 +773,7 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .setup_environment(SetupEnvironmentInput {
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    root: VirtualPath::new(sandbox.path()),
                     toolchain_config: json!({}),
                     ..Default::default()
                 })
@@ -788,23 +787,22 @@ mod dotnet_toolchain_tier2 {
                 command.command.args,
                 vec!["tool".to_string(), "restore".to_string()]
             );
-            // The cache key embeds a digest of the manifest content, so a
-            // manifest edit changes the declaration moon fingerprints this
-            // action on (otherwise the restore would never re-run).
-            let cache_key = command.cache.as_deref().unwrap();
-            assert!(cache_key.starts_with("dotnet-tool-restore-"));
-            assert_eq!(command.inputs.len(), 1);
+            // Hashed rather than in-memory: the restore has to survive across
+            // processes, and the manifest is what decides whether it re-runs.
+            assert_eq!(command.cache, Some(CacheStrategy::Hash));
+            assert_eq!(
+                command.inputs,
+                vec![CacheInput::FileHash(VirtualPath::new(
+                    "/workspace/.config/dotnet-tools.json"
+                ))]
+            );
 
-            // Same content -> same key; different content -> different key.
-            let repeat = plugin
-                .setup_environment(SetupEnvironmentInput {
-                    root: VirtualPath::Real(sandbox.path().into()),
-                    toolchain_config: json!({}),
-                    ..Default::default()
-                })
-                .await;
-
-            assert_eq!(repeat.commands[0].cache.as_deref(), Some(cache_key));
+            // The label is the on-disk cache key, so it must stay stable —
+            // moon compares the fingerprint stored under it, and the manifest's
+            // content hash reaches that fingerprint through `inputs` above.
+            // A key that moved with the content would never find its own entry.
+            let label = command.label.clone().unwrap();
+            assert_eq!(label, "dotnet tool restore");
 
             sandbox.create_file(
                 ".config/dotnet-tools.json",
@@ -813,13 +811,14 @@ mod dotnet_toolchain_tier2 {
 
             let edited = plugin
                 .setup_environment(SetupEnvironmentInput {
-                    root: VirtualPath::Real(sandbox.path().into()),
+                    root: VirtualPath::new(sandbox.path()),
                     toolchain_config: json!({}),
                     ..Default::default()
                 })
                 .await;
 
-            assert_ne!(edited.commands[0].cache.as_deref(), Some(cache_key));
+            assert_eq!(edited.commands[0].label, Some(label));
+            assert_eq!(edited.commands[0].inputs, command.inputs);
         }
 
         #[tokio::test(flavor = "multi_thread")]
@@ -837,7 +836,7 @@ mod dotnet_toolchain_tier2 {
 
             let output = plugin
                 .setup_environment(SetupEnvironmentInput {
-                    root: VirtualPath::Real(sandbox.path().join("app")),
+                    root: VirtualPath::new(sandbox.path().join("app")),
                     toolchain_config: json!({}),
                     ..Default::default()
                 })
