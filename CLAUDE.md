@@ -71,7 +71,7 @@ So a default-features build on MSVC is unexercised. Nothing consumes the host
 DLL's exports, so this is a build-time risk only — but if you have the MSVC
 toolchain, `cargo build` on it is worth running before a release.
 
-## moon facts (verified against moon 2.3.3 and 2.4.5)
+## moon facts (verified against moon 2.5.2)
 
 - `moon toolchain info dotnet` requires the plugin locator as an explicit second
   argument — it does not read custom entries from `.moon/toolchains.yml`:
@@ -80,8 +80,23 @@ toolchain, `cargo build` on it is worth running before a release.
 - In `moon.yml`, `language: 'c#'` is rejected ("Invalid fallback variant"); use
   `language: 'csharp'`. The project-level key is `toolchains` (plural):
   `toolchains: { default: 'dotnet' }`.
-- moon 2.4.x introduced no toolchain WASM API changes (2.4.0 added built-in
-  Poetry/Ruby toolchains only); the plugin runs unmodified on 2.0–2.4.
+- **`LocateDependenciesRootOutput::members` is load-bearing since 2.5.** moon's
+  `in_dependencies_workspace` (`crates/toolchain-plugin/src/toolchain_plugin.rs`)
+  treats `None` as "the root path is the only member", so a project below the root
+  is neither root nor member and moon builds *no* `install_dependencies` or
+  `setup_environment` action for it — silently. We return `["**"]`. Symptom if it
+  regresses: `moon run x:build` runs the task and nothing else, then MSBuild fails
+  with NETSDK1004 (missing `project.assets.json`). A workspace with per-project
+  lock files hides it, because each project is then its own root.
+- `projects.globs` accepts a trailing file name since 2.5 (`'**/*.csproj'`), and
+  the project id comes from the **leaf directory name** — so repeated directory
+  names are a hard `project_graph::duplicate_id`. abp's `templates/` has 39 such
+  collisions over 80 projects, Ocelot's `samples/` has 2 over 8.
+- 2.4.x introduced no toolchain WASM API changes; 2.5.0 broke `VirtualPath`, which
+  is where the 2.5 floor comes from. `ExecCommand::cache` also changed shape there
+  (key string -> `CacheStrategy`, key now derived from `label`).
+- `moon action-graph <target>` opens a browser visualiser and blocks — do not run
+  it unattended.
 - `inheritAliases` is a moon-level per-toolchain setting, not one of ours.
 - A `file://` plugin locator in `.moon/toolchains.yml` resolves relative to the
   `.moon` directory, **not** the workspace root — `file://../../x.wasm` from a repo
@@ -89,14 +104,21 @@ toolchain, `cargo build` on it is worth running before a release.
   (`plugin::loader::file::missing`), but the error prints the joined path, which
   reads oddly (`<workspace>/.moon/../x.wasm`).
 
+## Dependency pins
+
+`moon_pdk_test_utils` requires an exact `proto_core`, and `proto_pdk_api` 0.33.2
+adds a `ChecksumAlgorithm` variant that `proto_core` 0.60.4 does not match on — a
+`cargo update` that takes 0.33.2 fails to compile the dev-dependency tree. The
+lockfile pins `proto_pdk_api` to 0.33.0, matching upstream `moonrepo/plugins`.
+
 ## Test harness facts (verified against vendored sources)
 
-- **`exec_command` in the test sandbox is REAL** — `warpgate-0.30.5/src/host.rs`
+- **`exec_command` in the test sandbox is REAL** — `warpgate-0.35.x/src/host.rs`
   (`fn exec_command`) spawns an actual `std::process::Command`, resolving the executable
   from the host `PATH`. moon's `crates/pdk-test-utils` sandbox registers these warpgate
   host functions unmocked (only moon's `load_*` data functions are mocked). Sandbox
   tests that shell out to `dotnet` therefore require a .NET SDK on the test machine.
 - **`find_wasm_file` prefers `release` over `debug`**
-  (`warpgate-0.30.5/src/test_utils.rs`, `profiles = ["release", "debug"]`). Never leave a
+  (`warpgate-0.35.x/src/test_utils.rs`, `profiles = ["release", "debug"]`). Never leave a
   stale `target/wasm32-wasip1/release/dotnet_toolchain.wasm` around while running tests
   against a freshly built debug wasm — delete the release artifact first.

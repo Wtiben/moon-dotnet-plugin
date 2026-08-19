@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.0
+
+#### 💥 Breaking
+
+- **Requires moon 2.5 or newer.** moon 2.5 reworked the `VirtualPath` WASM API
+  from an enum into a newtype over `PathBuf`, which changes how paths cross the
+  host boundary. Stay on v0.2.0 for moon 2.0-2.4.
+
+#### 🚀 Updates
+
+- Project files can be globbed directly now that moon 2.5 allows a trailing file
+  name in `projects.globs` — `'**/*.csproj'` replaces the generated
+  `projects.sources` map, and a workspace needs no `moon.yml` at all. Note that
+  moon derives each project id from its leaf directory name, so repositories with
+  repeated directory names (sample and template trees, typically) need either a
+  narrower glob or an `id:`-only `moon.yml` in the colliding directories.
+
+#### 🐞 Fixes
+
+- `dotnet restore` runs again for projects that sit below their dependencies root.
+  `locate_dependencies_root` declared no member globs, which moon 2.5 reads as
+  "the root is the only member" — so for the ordinary layout of one solution at
+  the repository root and no per-project lock files, moon built no
+  `install_dependencies` or `setup_environment` action for any project, and the
+  inferred `build --no-restore` failed on a missing `project.assets.json`.
+- `dotnet tool restore` moved to moon's `CacheStrategy::Hash`, which fingerprints
+  the declared cache inputs. The manifest digest that used to be folded into the
+  cache key by hand is now moon's job, and the key stays stable across manifest
+  edits as it must.
+
 ## 0.2.0
 
 #### 🚀 Updates

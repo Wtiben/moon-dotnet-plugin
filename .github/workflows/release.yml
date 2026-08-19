@@ -19,7 +19,7 @@ on:
 env:
   # moon version used to smoke-test the built wasm. Bump deliberately — this
   # is the compatibility contract the release is verified against.
-  MOON_SMOKE_VERSION: '2.3.3'
+  MOON_SMOKE_VERSION: '2.5.2'
 
 jobs:
   # The full CI test matrix (fmt, clippy, and the suite on ubuntu, macOS and

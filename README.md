@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Wtiben/moon-dotnet-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/Wtiben/moon-dotnet-plugin/actions/workflows/ci.yml)
 
-A [moon](https://moonrepo.dev) 2.x toolchain WASM plugin for the .NET ecosystem —
+A [moon](https://moonrepo.dev) 2.5+ toolchain WASM plugin for the .NET ecosystem —
 SDK-style C#, F#, and VB projects.
 
 It gives a moon workspace a real understanding of your .NET projects: the project
@@ -23,6 +23,10 @@ graph is derived from **actual MSBuild evaluation** rather than XML parsing, so
   official `dotnet-install` scripts.
 - **Docker** — restore-layer scaffold globs and `bin`/`obj` pruning.
 
+A workspace needs no `moon.yml` anywhere: `projects.globs` matches `.csproj` files
+directly, and language, toolchain, tasks, dependencies, and aliases are all inferred
+from there (see [Declaring the projects](#declaring-the-projects)).
+
 All projects are evaluated in **one batched MSBuild invocation** — a generated
 traversal project fans out to every project with parallel in-process worker nodes —
 so MSBuild's startup cost is paid once per graph build instead of once per project
@@ -32,7 +36,8 @@ evaluation automatically.
 
 ## Requirements
 
-- moon 2.0 or newer.
+- moon 2.5 or newer. (Earlier releases use the pre-2.5 `VirtualPath` WASM API; use
+  plugin v0.2.0 for moon 2.0-2.4.)
 - .NET SDK 8 or newer — dependency inference relies on MSBuild 17.8+ `-getProperty` /
   `-getItem` JSON output. The plugin can install the SDK for you; see
   [SDK installation](#sdk-installation).
@@ -43,7 +48,7 @@ Add the toolchain to `.moon/toolchains.yml`:
 
 ```yaml
 dotnet:
-  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.2.0'
+  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.3.0'
 ```
 
 moon downloads the wasm from the GitHub release and caches it — there is nothing to
@@ -67,22 +72,48 @@ tasks:
       - '*.csproj'
 ```
 
-> **Side note — discovery is still moon's job, and moon has no plugin hook for it.**
-> moon only creates projects that `.moon/workspace.yml` declares; a toolchain plugin
-> cannot contribute projects, and `projects.globs` only match directories or
-> `moon.yml` files — a glob like `'src/**/*.csproj'` is rejected (verified through
-> moon 2.4.5: *"Received a file path for a project root, must be a directory"*). So
-> for a repo with many projects you still need one of:
->
-> - **Explicit entries or directory globs** in `workspace.yml` covering every
->   project directory — then there are truly zero `moon.yml` files; or
-> - **One empty `moon.yml` stub per project directory** plus a single glob like
->   `'src/**/moon.yml'` — the stub only marks the directory as a project, and every
->   piece of actual configuration is still inferred.
->
-> Each moon project should be the directory that directly contains one `.csproj` —
-> the plugin deliberately does not search subdirectories, so mapping a whole
-> multi-project "service" folder as one moon project yields no inference.
+### Declaring the projects
+
+Discovery is moon's job, not the plugin's — a toolchain plugin cannot contribute
+projects. Since **moon 2.5** a project glob may end in a file name, so project files
+glob directly and no `moon.yml` is needed anywhere:
+
+```yaml
+# .moon/workspace.yml
+projects:
+  globs:
+    - '**/*.csproj'
+    - '**/*.fsproj'   # only if you have them
+    - '**/*.vbproj'
+```
+
+moon derives each project's id from the **leaf directory name**, so
+`src/Ordering.Api/Ordering.Api.csproj` becomes `Ordering.Api`. Two project
+directories sharing a leaf name are therefore a hard error
+(`project_graph::duplicate_id`), which in practice happens in sample and template
+trees:
+
+```
+× A project already exists with the identifier ApiGateway (existing source
+│ samples/Eureka/ApiGateway, new source samples/ServiceDiscovery/ApiGateway).
+```
+
+Either scope the globs away from those trees (`'framework/**/*.csproj'`), or give the
+colliding directories a one-line `moon.yml` — `id:` alone is enough, and everything
+else is still inferred:
+
+```yaml
+# samples/Eureka/ApiGateway/moon.yml
+id: 'eureka-api-gateway'
+```
+
+Each moon project should be the directory that directly contains one project file —
+the plugin deliberately does not search subdirectories, so mapping a whole
+multi-project "service" folder as one moon project yields no inference.
+
+On moon 2.0-2.4 a glob could only match directories, so every project needed an
+explicit `projects.sources` entry or a `moon.yml` stub. This plugin requires moon 2.5,
+so that no longer applies.
 
 Solution files are never parsed — `.sln`/`.slnx` only act as dependency-root
 markers.
@@ -103,7 +134,7 @@ All settings live under `dotnet:` in `.moon/toolchains.yml`.
 
 ```yaml
 dotnet:
-  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.2.0'
+  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.3.0'
   version: '8.0'
   inferTasks: ['build', 'test']
   restoreArgs: ['--no-cache']
@@ -269,7 +300,7 @@ using the official
 
 ```yaml
 dotnet:
-  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.2.0'
+  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.3.0'
   version: '8.0'   # channel; or '8.0.404' (exact), 'lts', 'sts', 'preview'
 ```
 
@@ -326,18 +357,30 @@ restore and repeat runs skip it. Global tools are out of scope.
 
 ## Verified against real repositories
 
-Each of these was cloned unmodified, given a generated project map, and run with the
-released plugin. In every case the graph built with no errors and the number of moon
-projects matched the number of project files on disk exactly.
+Each of these was cloned unmodified (shallow, at `master`) and run against moon 2.5.2
+with **no `projects.sources` map and no `moon.yml`** — discovery is a `'**/*.csproj'`
+glob and nothing else. In every case the graph built with no errors and the moon project
+count matched the project files on disk exactly.
 
 | Repository | Projects | Inferred edges | Tasks inferred | Cold graph | Warm graph |
 | --- | --- | --- | --- | --- | --- |
-| `serilog/serilog` | 6 | 6 | 6 build, 3 test, 1 run, 1 publish | 8s | 1s |
-| `ThreeMammals/Ocelot` | 21 | 30 | 21 build, 3 test, 15 run | 6s | 1s |
-| `dotnet/eShop` | 24 | 46 | 24 build, 5 test, 12 run, 10 publish | 7s | <1s |
-| `jellyfin/jellyfin` | 42 | 134 | 42 build, 16 test, 3 run, 3 publish | 7s | 1s |
-| `OrchardCMS/OrchardCore` | 238 | 1485 | 238 build, 4 test, 7 run, 3 publish | 18s | 1s |
-| `abpframework/abp` | 671 | 2374 | 671 build, 160 test, 65 run, 64 publish | 43s | 1s |
+| `serilog/serilog` | 6 | 6 | 6 build, 3 test, 1 run, 1 publish | 5s | 1s |
+| `dotnet/eShop` | 28 | 55 | 28 build, 9 test, 12 run, 10 publish | 5s | 1s |
+| `jellyfin/jellyfin` | 42 | 134 | 42 build, 16 test, 3 run, 3 publish | 6s | 1s |
+| `OrchardCMS/OrchardCore` | 244 | 1517 | 244 build, 4 test, 8 run, 3 publish | 11s | 1s |
+
+Two repositories have leaf-name collisions in their sample and template trees, so a bare
+glob is a `duplicate_id` error there (see [Declaring the
+projects](#declaring-the-projects)). Both resolve without a project map:
+
+| Repository | Collisions | Resolved by | Projects | Inferred edges | Tasks inferred | Cold graph | Warm graph |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `ThreeMammals/Ocelot` | 2 ids over 8 projects, all under `samples/` | one `id:`-only `moon.yml` per colliding directory (8 files) | 21 | 30 | 21 build, 3 test, 15 run | 5s | 1s |
+| `abpframework/abp` | 39 ids over 80 projects, all under `templates/` | globbing `framework/` and `modules/` instead | 560 | 1633 | 560 build, 149 test, 26 run, 26 publish | 26s | 1s |
+
+abp's `templates/` tree is scaffolding with placeholder project names
+(`MyCompanyName.MyProjectName.*`) repeated per template, which is why scoping the glob
+suits it better than 80 id overrides.
 
 Between them these cover Central Package Management, Microsoft.Testing.Platform and
 classic VSTest, multi-targeted projects, custom MSBuild project SDKs (`MSTest.Sdk`,
@@ -353,10 +396,8 @@ Beyond building the graph:
 - The warm timings are the evaluated-package-set cache doing its job. Nothing else
   changed between the two runs.
 
-Two things worth knowing if you reproduce this. Every repository needed a generated
-`projects.sources` map, because moon cannot glob project files (see the note under
-[Task inference](#task-inference)). And moon disables affected checks entirely on a
-shallow clone, so `git clone --depth 1` will report nothing as affected.
+One thing worth knowing if you reproduce this: moon disables affected checks entirely on
+a shallow clone, so `git clone --depth 1` will report nothing as affected.
 
 ## Limitations
 
