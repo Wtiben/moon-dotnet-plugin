@@ -9,12 +9,17 @@ permissions:
   id-token: write
 
 on:
+  # Kept for the case where pushing a semver tag becomes possible again; see
+  # "Why this is dispatch-driven" in CLAUDE.md. Either trigger publishes.
   push:
     tags:
       - 'v[0-9]+*'
-  # Manual dry-run of the verify path (tests + build + smoke test).
-  # Publishing steps only ever run on tag pushes.
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 0.3.0. Leave empty to dry-run the verify path without publishing.'
+        required: false
+        type: string
 
 env:
   # moon version used to smoke-test the built wasm. Bump deliberately — this
@@ -23,7 +28,7 @@ env:
 
 jobs:
   # The full CI test matrix (fmt, clippy, and the suite on ubuntu, macOS and
-  # windows) must pass before anything is built or published from a tag.
+  # windows) must pass before anything is built or published.
   test:
     name: Test
     uses: ./.github/workflows/ci.yml
@@ -33,28 +38,70 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     steps:
+      # Full history: the "commit is on main" gate below needs real ancestry,
+      # which a shallow clone cannot answer.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      # A tag must exactly match the crate version and have a changelog
-      # entry; otherwise the release would misreport its own version
+      # The two triggers converge here so every gate below has one version to
+      # check, whatever started the run: a tag push takes it from the tag, a
+      # dispatch from the input. An empty dispatch input means dry run, which
+      # is how the verify path is exercised without publishing anything.
+      - id: resolve
+        name: Resolve version and publish mode
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = 'push' ] && [ "${{ github.ref_type }}" = 'tag' ]; then
+            version="${GITHUB_REF_NAME#v}"
+            publish=true
+          elif [ -n "$INPUT_VERSION" ]; then
+            version="${INPUT_VERSION#v}"
+            publish=true
+          else
+            version=''
+            publish=false
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version='${version}', publish=${publish}"
+
+      # The released version must exactly match the crate version and have a
+      # changelog entry; otherwise the release would misreport its own version
       # (plugin_version comes from CARGO_PKG_VERSION) and silently overwrite
       # the ghcr tag derived from the crate version.
-      - name: Verify tag matches crate version
-        if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+      - name: Verify version matches crate version
+        if: ${{ steps.resolve.outputs.publish == 'true' }}
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
           CRATE=$(grep -m1 '^version' toolchains/dotnet/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-          if [ "$TAG" != "$CRATE" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match crate version ${CRATE} in toolchains/dotnet/Cargo.toml"
+          if [ "$VERSION" != "$CRATE" ]; then
+            echo "::error::Release version ${VERSION} does not match crate version ${CRATE} in toolchains/dotnet/Cargo.toml"
             exit 1
           fi
 
       - name: Verify changelog entry exists
-        if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+        if: ${{ steps.resolve.outputs.publish == 'true' }}
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          if ! grep -q "^## ${TAG}" toolchains/dotnet/CHANGELOG.md; then
-            echo "::error::No '## ${TAG}' entry in toolchains/dotnet/CHANGELOG.md"
+          if ! grep -q "^## ${VERSION}" toolchains/dotnet/CHANGELOG.md; then
+            echo "::error::No '## ${VERSION}' entry in toolchains/dotnet/CHANGELOG.md"
+            exit 1
+          fi
+
+      # A dispatch can be started from any ref, so make sure the commit being
+      # released is actually on main. A tag push is already a deliberate ref.
+      - name: Verify commit is on main
+        if: ${{ steps.resolve.outputs.publish == 'true' && github.event_name == 'workflow_dispatch' }}
+        run: |
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::${GITHUB_SHA} is not an ancestor of origin/main; release only from main"
             exit 1
           fi
 
@@ -90,13 +137,13 @@ jobs:
       # (The publish pass regenerates the artifacts from the same incremental
       # cargo output the smoke test just validated.)
       - name: Clean builds dir between passes
-        if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+        if: ${{ steps.resolve.outputs.publish == 'true' }}
         run: rm -rf builds
 
       # Second pass: identical build (incremental, same toolchain) that also
       # pushes the OCI artifact to ghcr.io. Only runs after the smoke test.
       - id: publish
-        if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+        if: ${{ steps.resolve.outputs.publish == 'true' }}
         uses: moonrepo/build-wasm-plugin@v0
         with:
           publish: true
@@ -109,8 +156,8 @@ jobs:
       # `build-wasm-plugin` emits a .sha256 that does not match the wasm it
       # leaves in builds/, so anyone verifying a downloaded asset by hand fails
       # (see #2). Recompute it from the exact file we are about to upload.
-      # Deliberately unconditional: on a workflow_dispatch dry-run this operates
-      # on the verify pass output, which keeps the step itself exercised.
+      # Deliberately unconditional: on a dry run this operates on the verify
+      # pass output, which keeps the step itself exercised.
       - name: Recompute wasm checksums
         run: |
           shopt -s nullglob
@@ -127,13 +174,19 @@ jobs:
             exit 1
           fi
 
-      - if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+      # `tag` and `commit` are what make this work without a pushed tag: the
+      # action creates the tag as part of creating the release, which is the
+      # only path GitHub's `immutable_release_tag` protection permits for a
+      # semver tag. On a tag push they simply name the tag that already exists.
+      - if: ${{ steps.resolve.outputs.publish == 'true' }}
         uses: ncipollo/release-action@v1
         with:
           artifacts: builds/*
           artifactErrorsFailBuild: true
           body: ${{ steps.publish.outputs.changelog-entry }}
+          commit: ${{ github.sha }}
           immutableCreate: true
           makeLatest: true
           prerelease: ${{ steps.publish.outputs.prerelease == 'true' }}
           skipIfReleaseExists: true
+          tag: ${{ steps.resolve.outputs.tag }}

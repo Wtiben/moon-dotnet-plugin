@@ -28,19 +28,67 @@ select `wasm32-wasip1` — without it the action tries the removed `wasm32-wasi`
 
 ## Releasing
 
-Releases are tag-driven and gated. To publish version `X.Y.Z`:
+Releases are dispatch-driven and gated. To publish version `X.Y.Z`:
 
 1. Bump `version` in `toolchains/dotnet/Cargo.toml`.
 2. Add a `## X.Y.Z` entry to `toolchains/dotnet/CHANGELOG.md`.
-3. Commit, then: `git tag vX.Y.Z && git push origin main vX.Y.Z`
-4. Bump the `plugin:` version in the README's examples for the new release.
+3. Bump the `plugin:` version in the README's examples for the new release.
+4. Commit and push to `main`.
+5. Run the Release workflow ("Run workflow") with **version** = `X.Y.Z`. Leave the
+   input empty to dry-run the verify path without publishing anything.
 
-The Release workflow then enforces, in order: the full CI test matrix (ubuntu +
-windows), tag == crate version, changelog entry exists, and a smoke test that loads the
-exact built wasm with a pinned moon binary (`MOON_SMOKE_VERSION` in `release.yml` — bump
-it deliberately; it is the compatibility contract the release is verified against). Only
-after all gates pass does it publish the ghcr.io OCI artifact and create the GitHub
-release (with `immutableCreate`, so assets are locked after creation).
+Do **not** create the tag by hand — the workflow creates it as part of creating the
+release. See "Why this is dispatch-driven" below.
+
+The Release workflow then enforces, in order: the full CI test matrix (ubuntu, macOS +
+windows), version == crate version, changelog entry exists, the released commit is an
+ancestor of `main`, and a smoke test that loads the exact built wasm with a pinned moon
+binary (`MOON_SMOKE_VERSION` in `release.yml` — bump it deliberately; it is the
+compatibility contract the release is verified against). Only after all gates pass does
+it publish the ghcr.io OCI artifact and create the GitHub release (with
+`immutableCreate`, so assets are locked after creation).
+
+### Why this is dispatch-driven
+
+Pushing a semver tag to this repository is impossible, and the error blames the wrong
+thing. `git push origin vX.Y.Z` fails with:
+
+```
+- Cannot create ref due to creations being restricted.
+```
+
+That is **not** the `protect-release-tags` ruleset. That ruleset contains only
+`deletion`, `non_fast_forward` and `update` (confirmed via REST, GraphQL and the UI),
+and the push still fails with the ruleset disabled. The real source only shows up in
+the rule-suites API:
+
+```bash
+gh api "repos/Wtiben/moon-dotnet-plugin/rulesets/rule-suites?ref=refs/tags/vX.Y.Z"
+gh api "repos/Wtiben/moon-dotnet-plugin/rulesets/rule-suites/<id>" --jq '.rule_evaluations'
+# => { "rule_source": { "type": "immutable_release_tag" }, "rule_type": "creation", ... }
+```
+
+`immutable_release_tag` is a GitHub-managed protection with no ruleset behind it, so it
+appears in no ruleset listing and no bypass applies to it (repo admin included). It is
+in force because releases here are published with `immutableCreate: true`, which makes
+GitHub reserve the semver tag namespace: tags in it may only be created *through* the
+release-creation flow. Turning off "Enable release immutability" in repo settings does
+not lift it, because the immutability came from the per-release API flag rather than
+that setting.
+
+Diagnostics worth knowing, all verified:
+
+- It is scoped to semver-shaped names. `vprobe` and `probe-x` push fine; `v0.3.0` does
+  not. For a non-matching ref the `creation` rule is not even evaluated.
+- It applies to the releases API too, so `gh release create` fails the same way —
+  `gh` does not create releases immutably. `ncipollo/release-action` with
+  `immutableCreate: true` does, which is why the workflow can create the tag and a
+  hand-rolled `gh release create` cannot.
+- `tag_name was used by an immutable release` is a **misleading** error: a version that
+  never had a release reports it too. It does not mean the version is burned.
+- Do not probe with a `v`-prefixed tag name. `protect-release-tags` restricts deletions
+  over `refs/tags/v*` with no bypass actor, so a throwaway `vfoo` tag cannot be deleted
+  again without temporarily disabling the ruleset.
 
 The "Recompute wasm checksums" step in `release.yml` is load-bearing, not
 belt-and-braces: `build-wasm-plugin` emits a `dotnet_toolchain.wasm.sha256` that
@@ -54,13 +102,14 @@ someone verified a download by hand.
 
 Guarantees:
 
-- A commit that fails tests cannot be released, even if tagged.
-- A tag that doesn't match the crate version (or lacks a changelog entry) fails fast.
+- A commit that fails tests cannot be released.
+- A version that doesn't match the crate version (or lacks a changelog entry) fails
+  fast, and a dispatch from a commit that isn't on `main` fails fast.
 - Published `v*` tags cannot be deleted or moved (repository ruleset
   "protect-release-tags"); re-releasing a version is a hard error. The escape hatch is
   deliberately manual: temporarily disable the ruleset in repo settings.
-- The verify path can be dry-run anytime via the workflow's "Run workflow" button
-  (`workflow_dispatch`) — publishing steps only ever run on tag pushes.
+- The verify path can be dry-run anytime by running the workflow with an empty
+  **version** input — publishing steps are all gated on a resolved version.
 
 ## Known coverage gap
 
