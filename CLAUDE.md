@@ -28,7 +28,9 @@ select `wasm32-wasip1` — without it the action tries the removed `wasm32-wasi`
 
 ## Releasing
 
-Releases are dispatch-driven and gated. To publish version `X.Y.Z`:
+Releases are gated, and can be started either by pushing `vX.Y.Z` or by dispatching the
+workflow with a version. The dispatch route is documented here because it needs no
+hand-created tag. To publish version `X.Y.Z`:
 
 1. Bump `version` in `toolchains/dotnet/Cargo.toml`.
 2. Add a `## X.Y.Z` entry to `toolchains/dotnet/CHANGELOG.md`.
@@ -37,8 +39,8 @@ Releases are dispatch-driven and gated. To publish version `X.Y.Z`:
 5. Run the Release workflow ("Run workflow") with **version** = `X.Y.Z`. Leave the
    input empty to dry-run the verify path without publishing anything.
 
-Do **not** create the tag by hand — the workflow creates it as part of creating the
-release. See "Why this is dispatch-driven" below.
+Never reuse a version number whose release was deleted; it is gone for good. See
+"A released version number can never be reused" below.
 
 The Release workflow then enforces, in order: the full CI test matrix (ubuntu, macOS +
 windows), version == crate version, changelog entry exists, the released commit is an
@@ -48,18 +50,19 @@ compatibility contract the release is verified against). Only after all gates pa
 it publish the ghcr.io OCI artifact and create the GitHub release (with
 `immutableCreate`, so assets are locked after creation).
 
-### Why this is dispatch-driven
+### A released version number can never be reused
 
-Pushing a semver tag to this repository is impossible, and the error blames the wrong
-thing. `git push origin vX.Y.Z` fails with:
+Deleting a release does **not** free its tag name. GitHub keeps a reservation, and any
+later attempt to create that tag fails — from `git push`, from `gh release create`, and
+from `ncipollo/release-action` alike:
 
 ```
 - Cannot create ref due to creations being restricted.
 ```
 
-That is **not** the `protect-release-tags` ruleset. That ruleset contains only
-`deletion`, `non_fast_forward` and `update` (confirmed via REST, GraphQL and the UI),
-and the push still fails with the ruleset disabled. The real source only shows up in
+The message names the wrong culprit. It is not the `protect-release-tags` ruleset, which
+holds only `deletion`, `non_fast_forward` and `update` (confirmed via REST, GraphQL and
+the UI) and refuses the push identically while disabled. The real source appears only in
 the rule-suites API:
 
 ```bash
@@ -68,48 +71,34 @@ gh api "repos/Wtiben/moon-dotnet-plugin/rulesets/rule-suites/<id>" --jq '.rule_e
 # => { "rule_source": { "type": "immutable_release_tag" }, "rule_type": "creation", ... }
 ```
 
-`immutable_release_tag` is a GitHub-managed protection with no ruleset behind it, so it
-appears in no ruleset listing and no bypass applies to it (repo admin included). It is
-in force because releases here are published with `immutableCreate: true`, which makes
-GitHub reserve the semver tag namespace: tags in it may only be created *through* the
-release-creation flow. Turning off "Enable release immutability" in repo settings does
-not lift it, because the immutability came from the per-release API flag rather than
-that setting.
+`immutable_release_tag` is GitHub-managed: attached to no ruleset, listed nowhere, and
+not bypassable by a repository admin. The accompanying error `tag_name was used by an
+immutable release` is **literally true** — believe it, even when no such release is
+present any more.
 
-Diagnostics worth knowing, all verified:
+**v0.3.0, v0.3.1 and v0.3.2 are burned on this repository.** They were published as
+immutable releases on 2026-07-26, under the version series that predates the
+renumbering to 0.1.0 (see the `chore: release 0.3.0` / `0.3.3` commits), and deleting
+those releases did not release the names. Which is why 0.3.0 was skipped and this went
+straight from 0.2.0 to 0.4.0. Verified free by probe: `v0.3.3`, `v0.4.0`, `v9.9.9`.
 
-- It is scoped to semver-shaped names. `vprobe` and `probe-x` push fine; `v0.3.0` does
-  not. For a non-matching ref the `creation` rule is not even evaluated.
-- It applies to the releases API too, so `gh release create` fails the same way —
-  `gh` does not create releases immutably. `ncipollo/release-action` with
-  `immutableCreate: true` does, which is why the workflow can create the tag and a
-  hand-rolled `gh release create` cannot.
-- `tag_name was used by an immutable release` is a **misleading** error: a version that
-  never had a release reports it too. It does not mean the version is burned.
-- Do not probe with a `v`-prefixed tag name. `protect-release-tags` restricts deletions
-  over `refs/tags/v*` with no bypass actor, so a throwaway `vfoo` tag cannot be deleted
-  again without temporarily disabling the ruleset.
+Consequences worth knowing:
 
-The "Recompute wasm checksums" step in `release.yml` is load-bearing, not
-belt-and-braces: `build-wasm-plugin` emits a `dotnet_toolchain.wasm.sha256` that
-does not match the wasm sitting next to it in `builds/`, so without that step
-every release ships a checksum that fails verification (#2). Don't drop the step
-on the assumption the action got fixed — verify against a published asset first.
+- It is per-name, not a pattern. A fresh version number tags and releases normally.
+- Never reuse a version number after deleting its release. Move forward instead.
+- `gh release create` cannot substitute for a tag push here; it fails the same way.
+- When a publish fails at the release step, a **draft** release is left behind holding
+  the uploaded assets (drafts need no tag). Delete it before retrying, or
+  `skipIfReleaseExists: true` makes the next run skip asset upload entirely.
+- Do not probe with a `v`-prefixed name. `protect-release-tags` restricts deletions over
+  `refs/tags/v*` with no bypass actor, so a throwaway `vfoo` cannot be removed again
+  without temporarily disabling the ruleset. Probe with a non-`v` name, or disable the
+  ruleset first.
 
-The wasm itself has always been fine. It matches its ghcr OCI layer byte for
-byte, and moon never reads the `.sha256`, which is why this went unnoticed until
-someone verified a download by hand.
-
-Guarantees:
-
-- A commit that fails tests cannot be released.
-- A version that doesn't match the crate version (or lacks a changelog entry) fails
-  fast, and a dispatch from a commit that isn't on `main` fails fast.
-- Published `v*` tags cannot be deleted or moved (repository ruleset
-  "protect-release-tags"); re-releasing a version is a hard error. The escape hatch is
-  deliberately manual: temporarily disable the ruleset in repo settings.
-- The verify path can be dry-run anytime by running the workflow with an empty
-  **version** input — publishing steps are all gated on a resolved version.
+The workflow accepts either trigger: pushing `vX.Y.Z`, or a `workflow_dispatch` with the
+**version** input. The dispatch path exists because it needs no hand-created tag —
+`ncipollo/release-action` creates the tag alongside the release — which keeps the process
+working even when tagging by hand is awkward.
 
 ## Known coverage gap
 

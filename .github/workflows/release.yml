@@ -9,15 +9,16 @@ permissions:
   id-token: write
 
 on:
-  # Kept for the case where pushing a semver tag becomes possible again; see
-  # "Why this is dispatch-driven" in CLAUDE.md. Either trigger publishes.
+  # Either trigger publishes. The dispatch route needs no hand-created tag,
+  # which also sidesteps the reserved-version trap documented in CLAUDE.md
+  # ("A released version number can never be reused").
   push:
     tags:
       - 'v[0-9]+*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release, e.g. 0.3.0. Leave empty to dry-run the verify path without publishing.'
+        description: 'Version to release, e.g. 0.4.0. Leave empty to dry-run the verify path without publishing.'
         required: false
         type: string
 
@@ -174,10 +175,10 @@ jobs:
             exit 1
           fi
 
-      # `tag` and `commit` are what make this work without a pushed tag: the
-      # action creates the tag as part of creating the release, which is the
-      # only path GitHub's `immutable_release_tag` protection permits for a
-      # semver tag. On a tag push they simply name the tag that already exists.
+      # `tag` and `commit` are what let a dispatch run without a pushed tag:
+      # the action creates the tag as part of creating the release. On a tag
+      # push they simply name the tag that already exists. Note this is no
+      # escape from a reserved version name — the action is refused there too.
       - if: ${{ steps.resolve.outputs.publish == 'true' }}
         uses: ncipollo/release-action@v1
         with:

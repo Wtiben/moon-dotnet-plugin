@@ -48,7 +48,7 @@ Add the toolchain to `.moon/toolchains.yml`:
 
 ```yaml
 dotnet:
-  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.3.0'
+  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.4.0'
 ```
 
 moon downloads the wasm from the GitHub release and caches it — there is nothing to
@@ -134,7 +134,7 @@ All settings live under `dotnet:` in `.moon/toolchains.yml`.
 
 ```yaml
 dotnet:
-  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.3.0'
+  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.4.0'
   version: '8.0'
   inferTasks: ['build', 'test']
   restoreArgs: ['--no-cache']
@@ -300,7 +300,7 @@ using the official
 
 ```yaml
 dotnet:
-  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.3.0'
+  plugin: 'github://Wtiben/moon-dotnet-plugin@v0.4.0'
   version: '8.0'   # channel; or '8.0.404' (exact), 'lts', 'sts', 'preview'
 ```
 
